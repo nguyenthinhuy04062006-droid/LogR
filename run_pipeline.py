@@ -27,6 +27,8 @@ from model import (
     confusion_matrix, roc_auc_score, average_precision_score,
     LogisticRegression, StratifiedKFold, GridSearchCV
 )
+from weights import save_weights, print_weight_summary
+
 
 def print_banner(text, width=76):
     print("\n" + "=" * width)
@@ -234,9 +236,9 @@ def main():
     print(f"\n  --> Cấu hình tối ưu nhất: {best_params} | Best CV F1 = {grid_search.best_score_:.4f}")
     
     print_section(17, "ĐÁNH GIÁ MÔ HÌNH TỐI ƯU TRÊN TẬP TEST ĐỘC LẬP")
-    # best_lr (GridSearchCV.best_estimator_) có scaler_ nội bộ → nhận X gốc, KHÔNG scale trước
-    y_pred_best = best_lr.predict(X_test)
-    y_proba_best = best_lr.predict_proba(X_test)[:, 1]
+    # best_lr duoc train tren du lieu scaled (X_fit), nen can dung X_test_scaled
+    y_pred_best = best_lr.predict(X_test_scaled)
+    y_proba_best = best_lr.predict_proba(X_test_scaled)[:, 1]
     
     acc_best = accuracy_score(y_test, y_pred_best)
     prec_best = precision_score(y_test, y_pred_best)
@@ -285,6 +287,48 @@ def main():
         print(f"  | {f_name:<22} | {w_val:^+10.4f} | {odds:^12.4f} | {impact:<18} |")
     print("  +" + "-"*24 + "+" + "-"*12 + "+" + "-"*14 + "+" + "-"*20 + "+")
 
+    # -------------------------------------------------------
+    # LUU TRONG SO RA FILE (sau buoc 20)
+    # -------------------------------------------------------
+    print("\n  [WEIGHTS] Dang luu trong so best model ra file...")
+
+    # Dam bao thu muc weights/ ton tai
+    weights_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights")
+    os.makedirs(weights_dir, exist_ok=True)
+
+    # Gan ten dac trung vao best_lr de weights.py hieu
+    best_lr.feature_names_ = feature_names
+
+    # Luu best model (GridSearch da chon)
+    save_weights(
+        best_lr,
+        path=os.path.join(weights_dir, "best_model_weights.npz"),
+        feature_names=feature_names
+    )
+    save_weights(
+        best_lr,
+        path=os.path.join(weights_dir, "best_model_weights.json"),
+        feature_names=feature_names
+    )
+
+    # Luu baseline de so sanh
+    base_lr.feature_names_ = feature_names
+    save_weights(
+        base_lr,
+        path=os.path.join(weights_dir, "baseline_weights.npz"),
+        feature_names=feature_names
+    )
+    save_weights(
+        base_lr,
+        path=os.path.join(weights_dir, "baseline_weights.json"),
+        feature_names=feature_names
+    )
+
+    print(f"  [WEIGHTS] Da luu xong vao thu muc: weights/")
+    print(f"    best_model_weights.npz / .json / .txt")
+    print(f"    baseline_weights.npz / .json / .txt")
+    print_weight_summary(best_lr, top_n=10)
+
     # -------------------------------------------------------------
     # BƯỚC 21: Tinh chỉnh ngưỡng quyết định (Threshold Tuning)
     # -------------------------------------------------------------
@@ -292,8 +336,7 @@ def main():
     thresholds = [0.30, 0.40, 0.45, 0.48, 0.50, 0.52, 0.55, 0.60, 0.70]
     records = []
     for th in thresholds:
-        # best_lr tự scale bên trong → dùng X_train gốc
-        preds_train = best_lr.predict(X_train, threshold=th)
+        preds_train = best_lr.predict(X_train_scaled, threshold=th)
         records.append({
             'th': th,
             'acc': accuracy_score(y_train, preds_train),
@@ -303,7 +346,7 @@ def main():
         })
         
     best_th_rec = max(records, key=lambda x: x['f1'])
-    preds_test_th = best_lr.predict(X_test, threshold=best_th_rec['th'])
+    preds_test_th = best_lr.predict(X_test_scaled, threshold=best_th_rec['th'])
     
     print("\n  BẢNG KHẢO SÁT PHỔ NGƯỠNG TRÊN TẬP TRAIN (Chống rò rỉ dữ liệu):")
     print("  +" + "-"*10 + "+" + "-"*13 + "+" + "-"*13 + "+" + "-"*13 + "+" + "-"*13 + "+")
@@ -335,7 +378,98 @@ def main():
     print(f"  | {'ROC-AUC':<20} | {auc_base:^14.4f} | {auc_best:^16.4f} | {auc_best:^16.4f} |")
     print(f"  | {'PR-AUC':<20} | {prauc_base:^14.4f} | {prauc_best:^16.4f} | {prauc_best:^16.4f} |")
     print("  +" + "-"*22 + "+" + "-"*16 + "+" + "-"*18 + "+" + "-"*18 + "+")
-    
+
+    # -------------------------------------------------------------
+    # BƯỚC 22: ĐÓNG GÓI MÔ HÌNH PRODUCTION (Model Serialization)
+    # -------------------------------------------------------------
+    import datetime
+    print_section(22, "ĐÓNG GÓI MÔ HÌNH PRODUCTION (Model Serialization)")
+
+    weights_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights")
+    os.makedirs(weights_dir, exist_ok=True)
+    weights_filename = os.path.join(weights_dir, "production_bundle.npz")
+
+    best_opt_th = best_th_rec['th']
+
+    export_bundle = {
+        # --- Trọng số mô hình ---
+        'weights'       : best_lr.weights,
+        'bias'          : np.array([best_lr.bias]),
+        # --- Thông số StandardScaler (bắt buộc để scale dữ liệu mới đúng) ---
+        'scaler_mean'   : scaler.mean_,
+        'scaler_scale'  : scaler.scale_,
+        # --- Ngưỡng quyết định tối ưu (Bước 21) ---
+        'best_th'       : np.array([best_opt_th]),
+        # --- Danh sách tên 27 đặc trưng theo đúng thứ tự train ---
+        'feature_names' : np.array(feature_names, dtype=str),
+        # --- Siêu tham số tối ưu ---
+        'C'             : np.array([best_lr.C]),
+        'penalty'       : np.array([str(best_lr.penalty) if best_lr.penalty is not None else 'none']),
+        'class_weight'  : np.array([str(best_lr.class_weight) if best_lr.class_weight is not None else 'none']),
+        'learning_rate' : np.array([best_lr.learning_rate]),
+        'max_iter'      : np.array([best_lr.max_iter]),
+        'tol'           : np.array([best_lr.tol]),
+        'l1_ratio'      : np.array([best_lr.l1_ratio]),
+        'init'          : np.array([best_lr.init]),
+        'random_state'  : np.array([best_lr.random_state]),
+    }
+
+    np.savez_compressed(weights_filename, **export_bundle)
+
+    sz = os.path.getsize(weights_filename) / 1024
+    print(f"\n  [EXPORT] File chính thức     : {weights_filename} ({sz:.2f} KB)")
+
+    print(f"  weights shape : {best_lr.weights.shape}  |  bias : {best_lr.bias:+.6f}")
+    print(f"  scaler mean_  : shape={scaler.mean_.shape}")
+    print(f"  scaler scale_ : shape={scaler.scale_.shape}")
+    print(f"  best_th (tau*): {best_opt_th:.2f}")
+    print(f"  feature_names : {len(feature_names)} biến ({', '.join(feature_names[:5])}, ...)")
+
+    # --- Kiểm chứng load lại ---
+    print("\n  [VERIFY] Đang load lại pipeline từ file .npz và kiểm chứng...")
+    data_v = np.load(weights_filename, allow_pickle=True)
+
+    scaler_v = StandardScaler()
+    scaler_v.mean_  = data_v['scaler_mean']
+    scaler_v.scale_ = data_v['scaler_scale']
+
+    pen_v = str(data_v['penalty'][0]); pen_v = None if pen_v == 'none' else pen_v
+    cw_v  = str(data_v['class_weight'][0]); cw_v = None if cw_v  == 'none' else cw_v
+    lr_v = LogisticRegression(
+        C=float(data_v['C'][0]), penalty=pen_v, class_weight=cw_v,
+        learning_rate=float(data_v['learning_rate'][0]),
+        max_iter=int(data_v['max_iter'][0]),
+        tol=float(data_v['tol'][0]),
+        l1_ratio=float(data_v['l1_ratio'][0]),
+        init=str(data_v['init'][0]),
+        random_state=int(data_v['random_state'][0])
+    )
+    lr_v.weights = data_v['weights']
+    lr_v.bias    = float(data_v['bias'][0])
+    th_v         = float(data_v['best_th'][0])
+
+    X_test_v     = scaler_v.transform(X_test)   # raw X_test, chưa scale
+    proba_v      = lr_v.predict_proba(X_test_v)[:, 1]
+    preds_v      = (proba_v >= th_v).astype(int)
+
+    # So sánh với kết quả gốc (y_proba_best = proba tại threshold 0.5 trước đó,
+    # nhưng ngưỡng cũng có thể khác → so sánh proba raw)
+    proba_orig   = best_lr.predict_proba(X_test_scaled)[:, 1]
+    max_diff     = float(np.max(np.abs(proba_orig - proba_v)))
+    is_close     = bool(np.allclose(proba_orig, proba_v))
+    pct_match    = float(np.mean(preds_test_th == preds_v) * 100)
+
+    print(f"\n  {'Sai lệch xác suất cực đại':42}: {max_diff:.2e}")
+    print(f"  {'np.allclose(proba_orig, proba_load)':42}: {is_close}")
+    print(f"  {'Tỷ lệ trùng khớp nhãn (0/1)':42}: {pct_match:.2f}%  ({len(preds_v):,} khách hàng)")
+    print(f"  {'Tái hiện F1 trên Test':42}: {f1_score(y_test, preds_v):.4f}")
+    print(f"  {'Tái hiện Recall trên Test':42}: {recall_score(y_test, preds_v):.4f}")
+    print(f"  {'Tái hiện Precision trên Test':42}: {precision_score(y_test, preds_v):.4f}")
+    if is_close and pct_match == 100.0:
+        print("\n  >>> ĐÓNG GÓI CHÍNH XÁC 100% — SẴN SÀNG VẬN HÀNH THỰC TẾ! <<<")
+    else:
+        print(f"\n  [CẢNH BÁO] Có sai lệch — kiểm tra lại scaler/ngưỡng!")
+
     elapsed = time.time() - start_total_time
     print_banner(f"PIPELINE THỰC NGHỆM HOÀN TẤT TRONG {elapsed:.1f} GIÂY!")
 

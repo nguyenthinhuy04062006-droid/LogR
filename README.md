@@ -37,9 +37,18 @@ d:\logistics  regression\
 │   ├── Pipeline                                # Đóng gói tuần tự Transformer -> Estimator
 │   └── Metrics                                 # accuracy, precision, recall, f1, confusion_matrix, roc_auc, pr_auc
 │
-├── run_pipeline.py                             # Script thực thi toàn bộ pipeline báo cáo chi tiết trên CLI (9 sections)
-├── generate_notebook.py                        # Script tự động sinh Jupyter Notebook kèm ảnh đồ thị nhúng
-├── credit_card_default_logistic_regression.ipynb # File Jupyter Notebook tương tác hoàn chỉnh
+├── weights.py                                  # Module utility độc lập lưu & tải trọng số (.npz, .json, .txt)
+├── weights/                                    # Thư mục lưu trữ artifact trọng số chuẩn hóa
+│   ├── baseline_weights.{npz,json,txt}         # Trọng số mô hình cơ sở Baseline
+│   ├── best_model_weights.{npz,json,txt}       # Trọng số mô hình tối ưu Best Model
+│   └── production_bundle.npz                   # Đóng gói Production đầy đủ (Scaler + Model + Ngưỡng tối ưu)
+│
+├── best_model_weights.json                     # Trọng số Best Model định dạng JSON (dễ đọc)
+├── best_model_weights.npz                      # Trọng số Best Model định dạng NPZ (tải nhanh)
+│
+├── run_pipeline.py                             # Script thực thi toàn bộ pipeline báo cáo chi tiết trên CLI
+├── generate_notebook_v2.py                     # Script tự động sinh Jupyter Notebook kèm ảnh đồ thị nhúng
+├── credit_card_default_logistic_regression.ipynb # File Jupyter Notebook tương tác hoàn chỉnh (22 bước)
 └── README.md                                   # Hướng dẫn chi tiết dự án
 ```
 
@@ -74,11 +83,12 @@ python run_pipeline.py
 18. Kiểm định thống kê độ tin cậy (Statistical Significance & Confidence)
 19. Phân tích lỗi (Error Analysis)
 20. Khả năng giải thích mô hình (Model Interpretability)
-21. Chu trình lặp cải tiến mô hình (Iterative ML Development Cycle)
+21. Chu trình lặp cải tiến mô hình & Khảo sát ngưỡng tối ưu (Threshold Tuning)
+22. Đóng gói và Xuất bản Mô hình Production (Model Serialization & Production Deployment)
 
 #### Sinh lại Jupyter Notebook (nếu cần)
 ```powershell
-python generate_notebook.py
+python generate_notebook_v2.py
 ```
 
 ---

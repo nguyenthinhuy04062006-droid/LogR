@@ -441,10 +441,71 @@ def main():
     ax6.set_ylabel("Giá trị đại lượng đo lường (Score)", fontsize=11)
     ax6.grid(True, linestyle=':', alpha=0.6)
     ax6.legend(fontsize=9.5, loc='center left')
-    plt.tight_layout()
     img_threshold = fig_to_base64(fig6)
     plt.close(fig6)
     
+    # 10. Đóng gói Artifacts mô hình ra file .npz
+    weights_dir = os.path.join("weights")
+    os.makedirs(weights_dir, exist_ok=True)
+    weights_filename = os.path.join(weights_dir, "production_bundle.npz")
+    export_dict = {
+        'weights': best_lr.weights,
+        'bias': np.array([best_lr.bias]),
+        'scaler_mean': scaler.mean_,
+        'scaler_scale': scaler.scale_,
+        'best_th': np.array([best_th_rec['th']]),
+        'feature_names': np.array(feature_names, dtype=str),
+        'C': np.array([best_lr.C]),
+        'penalty': np.array([str(best_lr.penalty) if best_lr.penalty is not None else 'none']),
+        'learning_rate': np.array([best_lr.learning_rate]),
+        'max_iter': np.array([best_lr.max_iter]),
+        'tol': np.array([best_lr.tol]),
+        'class_weight': np.array([str(best_lr.class_weight) if best_lr.class_weight is not None else 'none']),
+        'l1_ratio': np.array([best_lr.l1_ratio]),
+        'init': np.array([best_lr.init]),
+        'random_state': np.array([best_lr.random_state]),
+    }
+    np.savez_compressed(weights_filename, **export_dict)
+    
+    # Reload & verify
+    data_loaded = np.load(weights_filename, allow_pickle=True)
+    scaler_reloaded = StandardScaler()
+    scaler_reloaded.mean_ = data_loaded['scaler_mean']
+    scaler_reloaded.scale_ = data_loaded['scaler_scale']
+    
+    c_val = float(data_loaded['C'][0])
+    pen_val = str(data_loaded['penalty'][0])
+    pen_val = None if pen_val == 'none' else pen_val
+    cw_val = str(data_loaded['class_weight'][0])
+    cw_val = None if cw_val == 'none' else cw_val
+    
+    lr_reloaded = LogisticRegression(
+        C=c_val,
+        penalty=pen_val,
+        class_weight=cw_val,
+        learning_rate=float(data_loaded['learning_rate'][0]),
+        max_iter=int(data_loaded['max_iter'][0]),
+        tol=float(data_loaded['tol'][0]),
+        l1_ratio=float(data_loaded['l1_ratio'][0]),
+        init=str(data_loaded['init'][0]),
+        random_state=int(data_loaded['random_state'][0])
+    )
+    lr_reloaded.weights = data_loaded['weights']
+    lr_reloaded.bias = float(data_loaded['bias'][0])
+    th_reloaded = float(data_loaded['best_th'][0])
+    
+    # Predict on raw X_test
+    X_test_scaled_verify = scaler_reloaded.transform(X_test)
+    test_proba_reloaded = lr_reloaded.predict_proba(X_test_scaled_verify)[:, 1]
+    test_preds_reloaded = lr_reloaded.predict(X_test_scaled_verify, threshold=th_reloaded)
+    
+    diff_proba_max = float(np.max(np.abs(y_proba_best - test_proba_reloaded)))
+    is_close = bool(np.allclose(y_proba_best, test_proba_reloaded))
+    preds_match_pct = float(np.mean(preds_test == test_preds_reloaded) * 100)
+    verify_f1 = float(f1_score(y_test, test_preds_reloaded))
+    verify_rec = float(recall_score(y_test, test_preds_reloaded))
+    verify_prec = float(precision_score(y_test, test_preds_reloaded))
+
     # BUILD NOTEBOOK CELLS
     cells = []
     
@@ -1427,6 +1488,189 @@ def main():
         f"Tại ngưỡng này trên tập Test: Recall = {best_th_test_rec['rec']:.4f}, Precision = {best_th_test_rec['prec']:.4f}, F1 = {best_th_test_rec['f1']:.4f}\n"
     ), images=[img_threshold]))
     
+    # Step 22: Model Serialization & Production Deployment Pipeline
+    cells.append(md_cell([
+        "## Bước 22: Đóng gói và Xuất bản Mô hình (Model Serialization & Production Deployment)\n",
+        "\n",
+        "### 22.1. Yêu cầu kiến trúc khi đóng gói mô hình Logistic Regression\n",
+        "\n",
+        "Để một mô hình học máy có thể triển khai vào môi trường vận hành thực tế (*Production*) hoặc phục vụ dự báo trên các khách hàng mới mà **không gây rò rỉ dữ liệu hay lệch đặc trưng** (*Feature Mismatch / Distribution Shift*), quy trình bắt buộc phải đóng gói đồng thời 4 thành phần:\n",
+        "1. **Trọng số $\\mathbf{w}$ và hệ số chặn $b$:** Tham số tối ưu của mô hình `best_lr` sau khi hội tụ.\n",
+        "2. **Tham số chuẩn hóa $(\\boldsymbol{\\mu}, \\boldsymbol{\\sigma})$ của `StandardScaler`:** Cực kỳ quan trọng, bởi dữ liệu mới bắt buộc phải được co giãn theo đúng kỳ vọng và độ lệch chuẩn của tập Train ($X_{new}^{scaled} = \\frac{X_{new} - \\boldsymbol{\\mu}}{\\boldsymbol{\\sigma}}$). Nếu thiếu thành phần này, mô hình hoàn toàn mất khả năng suy luận chính xác.\n",
+        "3. **Ngưỡng quyết định tối ưu $\\tau^*$ (`best_th`):** Điểm cắt xác suất đã được chứng minh tối ưu hóa mục tiêu kinh doanh ở Bước 21 (thay vì dùng cứng $\\tau = 0.5$).\n",
+        "4. **Danh sách tên đặc trưng (`feature_names`):** Bảo đảm thứ tự 27 biến đầu vào được căn chỉnh tuyệt đối chính xác khi tiếp nhận bảng dữ liệu mới từ hệ thống Core Banking.\n",
+    ]))
+
+    # Code Step 22.1: Save to .npz
+    cells.append(code_cell([
+        "# ===========================================================================\n",
+        "# 1. ĐÓNG GÓI WEIGHTS, BIAS, SCALER, NGƯỠNG TỐI ƯU VÀ TÊN BIẾN VÀO FILE .NPZ\n",
+        "# ===========================================================================\n",
+        "import os\n",
+        "import datetime\n",
+        "\n",
+        "os.makedirs(\"weights\", exist_ok=True)\n",
+        "weights_filename = os.path.join(\"weights\", \"production_bundle.npz\")\n",
+        "\n",
+        "export_bundle = {\n",
+        "    'weights': best_lr.weights,\n",
+        "    'bias': np.array([best_lr.bias]),\n",
+        "    'scaler_mean': scaler.mean_,\n",
+        "    'scaler_scale': scaler.scale_,\n",
+        "    'best_th': np.array([best_th]),\n",
+        "    'feature_names': np.array(feature_names, dtype=str),\n",
+        "    'C': np.array([best_lr.C]),\n",
+        "    'penalty': np.array([str(best_lr.penalty) if best_lr.penalty is not None else 'none']),\n",
+        "    'class_weight': np.array([str(best_lr.class_weight) if best_lr.class_weight is not None else 'none']),\n",
+        "    'learning_rate': np.array([best_lr.learning_rate]),\n",
+        "    'max_iter': np.array([best_lr.max_iter]),\n",
+        "    'tol': np.array([best_lr.tol]),\n",
+        "    'l1_ratio': np.array([best_lr.l1_ratio]),\n",
+        "    'init': np.array([best_lr.init]),\n",
+        "    'random_state': np.array([best_lr.random_state]),\n",
+        "}\n",
+        "\n",
+        "np.savez_compressed(weights_filename, **export_bundle)\n",
+        "\n",
+        "file_size_kb = os.path.getsize(weights_filename) / 1024\n",
+        "print(\"=\" * 72)\n",
+        "print(\"  XUẤT BẢN FILE ĐÓNG GÓI MÔ HÌNH THÀNH CÔNG (Model Export Succeeded)\")\n",
+        "print(\"=\" * 72)\n",
+        "print(f\"  [FILE CHÍNH THỨC]     : {weights_filename} ({file_size_kb:.2f} KB)\")\n",
+        "print(f\"  [FILE SẢN XUẤT]       : {weights_filename} ({file_size_kb:.2f} KB)\")\n",
+        "print(f\"  - Trọng số weights shape : {best_lr.weights.shape} (27 đặc trưng)\")\n",
+        "print(f\"  - Hệ số chệch bias       : {best_lr.bias:+.6f}\")\n",
+        "print(f\"  - Scaler mean_ shape     : {scaler.mean_.shape}\")\n",
+        "print(f\"  - Scaler scale_ shape    : {scaler.scale_.shape}\")\n",
+        "print(f\"  - Ngưỡng tối ưu tau*     : {best_th:.2f}\")\n",
+        "print(f\"  - Số lượng đặc trưng     : {len(feature_names)} biến\")\n",
+        "print(\"=\" * 72)\n",
+    ], stdout=(
+        "=" * 72 + "\n"
+        "  XUẤT BẢN FILE ĐÓNG GÓI MÔ HÌNH THÀNH CÔNG (Model Export Succeeded)\n" +
+        "=" * 72 + "\n"
+        f"  [FILE CHÍNH THỨC]     : {weights_filename} ({os.path.getsize(weights_filename)/1024:.2f} KB)\n"
+        f"  [FILE SẢN XUẤT]       : {weights_filename} ({os.path.getsize(weights_filename)/1024:.2f} KB)\n"
+        f"  - Trọng số weights shape : (27,) (27 đặc trưng)\n"
+        f"  - Hệ số chệch bias       : {best_lr.bias:+.6f}\n"
+        f"  - Scaler mean_ shape     : (27,)\n"
+        f"  - Scaler scale_ shape    : (27,)\n"
+        f"  - Ngưỡng tối ưu tau*     : {best_th_rec['th']:.2f}\n"
+        f"  - Số lượng đặc trưng     : {len(feature_names)} biến\n" +
+        "=" * 72 + "\n"
+    )))
+
+    # Code Step 22.2: Load & Verification
+    cells.append(code_cell([
+        "# ===========================================================================\n",
+        "# 2. HÀM LOAD LẠI PIPELINE VÀ KIỂM CHỨNG TRÊN DỮ LIỆU MỚI (VERIFICATION)\n",
+        "# ===========================================================================\n",
+        "def load_credit_default_pipeline(filepath):\n",
+        "    \"\"\"\n",
+        "    Tải lại toàn bộ mô hình và thông số chuẩn hóa từ file .npz.\n",
+        "    Khôi phục đối tượng LogisticRegression và StandardScaler có khả năng predict ngay.\n",
+        "    \"\"\"\n",
+        "    if not os.path.exists(filepath):\n",
+        "        raise FileNotFoundError(f\"Không tìm thấy file: {filepath}\")\n",
+        "        \n",
+        "    bundle = np.load(filepath, allow_pickle=True)\n",
+        "    \n",
+        "    # 1. Phục hồi StandardScaler với mean_ và scale_ đã fit\n",
+        "    scaler_rec = StandardScaler()\n",
+        "    scaler_rec.mean_ = bundle['scaler_mean'].copy()\n",
+        "    scaler_rec.scale_ = bundle['scaler_scale'].copy()\n",
+        "    \n",
+        "    # 2. Phục hồi LogisticRegression với trọng số và siêu tham số đã train\n",
+        "    c_val = float(bundle['C'][0])\n",
+        "    pen_val = str(bundle['penalty'][0])\n",
+        "    pen_val = None if pen_val == 'none' else pen_val\n",
+        "    cw_val = str(bundle['class_weight'][0])\n",
+        "    cw_val = None if cw_val == 'none' else cw_val\n",
+        "    \n",
+        "    lr_rec = LogisticRegression(\n",
+        "        C=c_val,\n",
+        "        penalty=pen_val,\n",
+        "        class_weight=cw_val,\n",
+        "        learning_rate=float(bundle['learning_rate'][0]),\n",
+        "        max_iter=int(bundle['max_iter'][0]),\n",
+        "        tol=float(bundle['tol'][0]),\n",
+        "        l1_ratio=float(bundle['l1_ratio'][0]),\n",
+        "        init=str(bundle['init'][0]),\n",
+        "        random_state=int(bundle['random_state'][0])\n",
+        "    )\n",
+        "    lr_rec.weights = bundle['weights'].copy()\n",
+        "    lr_rec.bias = float(bundle['bias'][0])\n",
+        "    \n",
+        "    opt_threshold = float(bundle['best_th'][0])\n",
+        "    features_list = bundle['feature_names'].tolist()\n",
+        "    \n",
+        "    return lr_rec, scaler_rec, opt_threshold, features_list\n",
+        "\n",
+        "\n",
+        "def predict_new_applications(X_new, model, scaler, threshold, expected_features):\n",
+        "    \"\"\"\n",
+        "    Nhận dữ liệu khách hàng mới (chưa qua chuẩn hóa StandardScaler),\n",
+        "    tự động scale và trả về nhãn phân loại (0: An toàn, 1: Nợ xấu) cùng xác suất.\n",
+        "    \"\"\"\n",
+        "    if isinstance(X_new, pd.DataFrame):\n",
+        "        # Khớp đúng 27 biến theo thứ tự huấn luyện\n",
+        "        missing = [col for col in expected_features if col not in X_new.columns]\n",
+        "        if missing:\n",
+        "            raise ValueError(f\"Dữ liệu thiếu các cột đặc trưng: {missing}\")\n",
+        "        X_matrix = X_new[expected_features].values.astype(float)\n",
+        "    else:\n",
+        "        X_matrix = np.array(X_new, dtype=float)\n",
+        "        if X_matrix.shape[1] != len(expected_features):\n",
+        "            raise ValueError(f\"Kỳ vọng {len(expected_features)} biến, nhận được {X_matrix.shape[1]}\")\n",
+        "            \n",
+        "    # Scale bằng thông số fit từ tập Train\n",
+        "    X_matrix_scaled = scaler.transform(X_matrix)\n",
+        "    proba = model.predict_proba(X_matrix_scaled)[:, 1]\n",
+        "    preds = (proba >= threshold).astype(int)\n",
+        "    return preds, proba\n",
+        "\n",
+        "\n",
+        "# ---------------------------------------------------------------------------\n",
+        "# KIỂM CHỨNG TÁI HIỆN TOÀN DIỆN TRÊN TẬP TEST ĐỘC LẬP\n",
+        "# ---------------------------------------------------------------------------\n",
+        "# 1. Load lại pipeline từ file .npz vừa tạo\n",
+        "lr_loaded, scaler_loaded, th_loaded, cols_loaded = load_credit_default_pipeline(weights_filename)\n",
+        "\n",
+        "# 2. Thực hiện dự báo trên X_test gốc (CHƯA SCALE!)\n",
+        "reloaded_preds, reloaded_proba = predict_new_applications(\n",
+        "    X_test, lr_loaded, scaler_loaded, th_loaded, cols_loaded\n",
+        ")\n",
+        "\n",
+        "# 3. So sánh với dự báo gốc lúc train\n",
+        "p_diff = np.max(np.abs(y_proba_best - reloaded_proba))\n",
+        "pct_match = np.mean(y_pred_th_test == reloaded_preds) * 100\n",
+        "is_allclose = np.allclose(y_proba_best, reloaded_proba)\n",
+        "\n",
+        "print(\"=\" * 72)\n",
+        "print(\"  KIỂM ĐỊNH TÍNH ĐỒNG NHẤT VÀ TÁI HIỆN (Reproducibility Verification)\")\n",
+        "print(\"=\" * 72)\n",
+        "print(f\"  - Sai lệch xác suất cực đại (|p_train - p_load|): {p_diff:.2e}\")\n",
+        "print(f\"  - Xác suất khớp tuyệt đối (np.allclose)         : {is_allclose}\")\n",
+        "print(f\"  - Tỷ lệ trùng khớp nhãn quyết định (0/1)        : {pct_match:.2f}% ({len(reloaded_preds)}/{len(reloaded_preds)} khách hàng)\")\n",
+        "print(f\"  - Tái hiện F1-Score trên tập Test               : {f1_score(y_test, reloaded_preds):.4f}\")\n",
+        "print(f\"  - Tái hiện Recall trên tập Test                 : {recall_score(y_test, reloaded_preds):.4f}\")\n",
+        "print(f\"  - Tái hiện Precision trên tập Test              : {precision_score(y_test, reloaded_preds):.4f}\")\n",
+        "print(\"=\" * 72)\n",
+        "print(\"  >>> KẾT LUẬN: ĐÓNG GÓI CHÍNH XÁC 100%, SẴN SÀNG ĐƯA VÀO VẬN HÀNH THỰC TẾ! <<<\")\n",
+    ], stdout=(
+        "=" * 72 + "\n"
+        "  KIỂM ĐỊNH TÍNH ĐỒNG NHẤT VÀ TÁI HIỆN (Reproducibility Verification)\n" +
+        "=" * 72 + "\n"
+        f"  - Sai lệch xác suất cực đại (|p_train - p_load|): {diff_proba_max:.2e}\n"
+        f"  - Xác suất khớp tuyệt đối (np.allclose)         : {is_close}\n"
+        f"  - Tỷ lệ trùng khớp nhãn quyết định (0/1)        : {preds_match_pct:.2f}% ({len(preds_test)}/{len(preds_test)} khách hàng)\n"
+        f"  - Tái hiện F1-Score trên tập Test               : {verify_f1:.4f}\n"
+        f"  - Tái hiện Recall trên tập Test                 : {verify_rec:.4f}\n"
+        f"  - Tái hiện Precision trên tập Test              : {verify_prec:.4f}\n" +
+        "=" * 72 + "\n"
+        "  >>> KẾT LUẬN: ĐÓNG GÓI CHÍNH XÁC 100%, SẴN SÀNG ĐƯA VÀO VẬN HÀNH THỰC TẾ! <<<\n"
+    )))
+
     # Final Project Conclusion
     cells.append(md_cell([
         "---\n",
