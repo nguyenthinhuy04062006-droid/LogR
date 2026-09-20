@@ -501,3 +501,40 @@ class GridSearchCV:
             X = self.scaler_.transform(X)
         return self.best_estimator_.predict_proba(X)
 
+
+class CreditDefaultInferencePipeline:
+    """
+    Pipeline suy luận tự động hóa cho mô hình dự báo rủi ro tín dụng.
+    Tự động tiếp nhận dữ liệu khách hàng mới (thô), tiền xử lý chuẩn hóa,
+    tính toán xác suất và phân định quyết định cấp tín dụng theo ngưỡng tối ưu.
+    """
+    def __init__(self, model, scaler, threshold, feature_names):
+        self.model = model
+        self.scaler = scaler
+        self.threshold = float(threshold)
+        self.feature_names = list(feature_names)
+        
+    def predict_proba(self, X_input):
+        X_mat = self._prepare_matrix(X_input)
+        X_scaled = self.scaler.transform(X_mat)
+        return self.model.predict_proba(X_scaled)[:, 1]
+        
+    def predict(self, X_input):
+        proba = self.predict_proba(X_input)
+        return (proba >= self.threshold).astype(int)
+        
+    def _prepare_matrix(self, X_input):
+        if hasattr(X_input, 'columns'):  # DataFrame
+            missing = [c for c in self.feature_names if c not in X_input.columns]
+            if missing:
+                raise ValueError(f"Dữ liệu đầu vào thiếu các đặc trưng: {missing}")
+            return X_input[self.feature_names].values.astype(float)
+        else:
+            arr = np.array(X_input, dtype=float)
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)
+            if arr.shape[1] != len(self.feature_names):
+                raise ValueError(f"Số lượng đặc trưng không khớp: kỳ vọng {len(self.feature_names)}, nhận {arr.shape[1]}")
+            return arr
+
+

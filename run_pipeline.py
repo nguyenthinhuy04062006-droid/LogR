@@ -330,9 +330,9 @@ def main():
     print_weight_summary(best_lr, top_n=10)
 
     # -------------------------------------------------------------
-    # BƯỚC 21: Tinh chỉnh ngưỡng quyết định (Threshold Tuning)
+    # BƯỚC 21: Tinh chỉnh ngưỡng quyết định và Đóng gói mô hình
     # -------------------------------------------------------------
-    print_section(21, "TINH CHỈNH NGƯỠNG QUYẾT ĐỊNH (Decision Threshold Tuning)")
+    print_section(21, "TINH CHỈNH NGƯỠNG QUYẾT ĐỊNH & ĐÓNG GÓI MÔ HÌNH")
     thresholds = [0.30, 0.40, 0.45, 0.48, 0.50, 0.52, 0.55, 0.60, 0.70]
     records = []
     for th in thresholds:
@@ -379,12 +379,7 @@ def main():
     print(f"  | {'PR-AUC':<20} | {prauc_base:^14.4f} | {prauc_best:^16.4f} | {prauc_best:^16.4f} |")
     print("  +" + "-"*22 + "+" + "-"*16 + "+" + "-"*18 + "+" + "-"*18 + "+")
 
-    # -------------------------------------------------------------
-    # BƯỚC 22: ĐÓNG GÓI MÔ HÌNH PRODUCTION (Model Serialization)
-    # -------------------------------------------------------------
-    import datetime
-    print_section(22, "ĐÓNG GÓI MÔ HÌNH PRODUCTION (Model Serialization)")
-
+    # --- Đóng gói mô hình Production ngay trong Bước 21 ---
     weights_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights")
     os.makedirs(weights_dir, exist_ok=True)
     weights_filename = os.path.join(weights_dir, "production_bundle.npz")
@@ -469,6 +464,30 @@ def main():
         print("\n  >>> ĐÓNG GÓI CHÍNH XÁC 100% — SẴN SÀNG VẬN HÀNH THỰC TẾ! <<<")
     else:
         print(f"\n  [CẢNH BÁO] Có sai lệch — kiểm tra lại scaler/ngưỡng!")
+
+    # --- Demo suy luận thực tế với CreditDefaultInferencePipeline ---
+    from model import CreditDefaultInferencePipeline
+    pipeline_prod = CreditDefaultInferencePipeline(
+        model=lr_v, scaler=scaler_v, threshold=th_v, feature_names=feature_names
+    )
+    sample_idx = 0
+    sample_input = X_test[sample_idx:sample_idx+1]
+    sample_prob = float(pipeline_prod.predict_proba(sample_input)[0])
+    sample_pred = int(pipeline_prod.predict(sample_input)[0])
+    true_lbl = int(y_test[sample_idx])
+    dec_text = "CẢNH BÁO NỢ XẤU / TỪ CHỐI CẤP TÍN DỤNG" if sample_pred == 1 else "AN TOÀN / CHẤP THUẬN CẤP TÍN DỤNG"
+    true_text = "Vỡ nợ thực tế (Nhãn 1)" if true_lbl == 1 else "Đúng hạn thực tế (Nhãn 0)"
+
+    print("\n" + "=" * 76)
+    print("  KẾT QUẢ SUY LUẬN HỒ SƠ KHÁCH HÀNG (CREDIT DEFAULT INFERENCE PIPELINE)")
+    print("=" * 76)
+    print(f"  - Số lượng đặc trưng đầu vào : {len(pipeline_prod.feature_names)}")
+    print(f"  - Xác suất vỡ nợ dự báo      : {sample_prob:.4f} ({sample_prob*100:.2f}%)")
+    print(f"  - Ngưỡng quyết định tối ưu   : {pipeline_prod.threshold:.4f}")
+    print(f"  - Quyết định phân loại       : Nhãn {sample_pred} -> {dec_text}")
+    print(f"  - Nhãn thực tế đối chiếu     : Nhãn {true_lbl} -> {true_text}")
+    print(f"  - Đánh giá tính chính xác    : {'CHÍNH XÁC' if sample_pred == true_lbl else 'CẦN THẨM ĐỊNH LẠI'}")
+    print("=" * 76)
 
     elapsed = time.time() - start_total_time
     print_banner(f"PIPELINE THỰC NGHỆM HOÀN TẤT TRONG {elapsed:.1f} GIÂY!")

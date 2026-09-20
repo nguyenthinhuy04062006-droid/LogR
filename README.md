@@ -25,31 +25,22 @@ Dự án giải quyết bài toán phân loại nhị phân: **Dự đoán khả
 ```text
 d:\logistics  regression\
 │
-├── default_of_credit_card_clients.csv          # Tập dữ liệu gốc (30,000 dòng, 25 cột)
+├── tests/
+│   └── test_pipeline.py                        # Bộ kiểm thử tự động toàn bộ quy trình (7/7 tests pass)
 │
+├── .gitignore                                  # Cấu hình bỏ qua file tạm, cache
+├── README.md                                   # Hướng dẫn chi tiết dự án
 ├── model.py                                    # Module chứa toàn bộ class và hàm ML code thuần
-│   ├── StandardScaler                          # Chuẩn hóa đặc trưng (z-score)
-│   ├── train_test_split                        # Phân chia dữ liệu phân tầng (Stratified)
-│   ├── LogisticRegression                      # Mô hình Logistic Regression (Hỗ trợ L1/L2/ElasticNet/Loss Check)
-│   ├── StratifiedKFold                         # Phân tầng K-Fold
-│   ├── cross_validate                          # Đánh giá K-Fold (hỗ trợ Zero-Leakage)
-│   ├── GridSearchCV                            # Tinh chỉnh siêu tham số (hỗ trợ Zero-Leakage)
-│   ├── Pipeline                                # Đóng gói tuần tự Transformer -> Estimator
-│   └── Metrics                                 # accuracy, precision, recall, f1, confusion_matrix, roc_auc, pr_auc
-│
-├── weights.py                                  # Module utility độc lập lưu & tải trọng số (.npz, .json, .txt)
-├── weights/                                    # Thư mục lưu trữ artifact trọng số chuẩn hóa
-│   ├── baseline_weights.{npz,json,txt}         # Trọng số mô hình cơ sở Baseline
-│   ├── best_model_weights.{npz,json,txt}       # Trọng số mô hình tối ưu Best Model
-│   └── production_bundle.npz                   # Đóng gói Production đầy đủ (Scaler + Model + Ngưỡng tối ưu)
-│
-├── best_model_weights.json                     # Trọng số Best Model định dạng JSON (dễ đọc)
-├── best_model_weights.npz                      # Trọng số Best Model định dạng NPZ (tải nhanh)
-│
-├── run_pipeline.py                             # Script thực thi toàn bộ pipeline báo cáo chi tiết trên CLI
-├── generate_notebook_v2.py                     # Script tự động sinh Jupyter Notebook kèm ảnh đồ thị nhúng
-├── credit_card_default_logistic_regression.ipynb # File Jupyter Notebook tương tác hoàn chỉnh (22 bước)
-└── README.md                                   # Hướng dẫn chi tiết dự án
+├── requirements.txt                            # Danh mục thư viện phụ thuộc tối thiểu
+├── run_pipeline.py                             # Script thực thi toàn bộ pipeline báo cáo 21 bước trên CLI
+├── default_of_credit_card_clients.csv          # Tập dữ liệu gốc (30,000 dòng, 25 cột)
+├── credit_card_default_logistic_regression.ipynb # Jupyter Notebook chuẩn học thuật 21 bước hoàn chỉnh
+├── weights.py                                  # Module lưu trữ & nạp trọng số (.npz, .json, .txt)
+└── weights/                                    # Thư mục lưu trữ artifact mô hình
+    ├── baseline_weights.{npz,json,txt}         # Trọng số mô hình cơ sở Baseline
+    ├── best_model_weights.{npz,json,txt}       # Trọng số mô hình tối ưu Best Model
+    ├── production_bundle.npz                   # Gói Production nhị phân (Scaler + Model + Ngưỡng)
+    └── production_bundle.json                  # Gói Production JSON có nhãn rõ ràng
 ```
 
 ---
@@ -83,12 +74,11 @@ python run_pipeline.py
 18. Kiểm định thống kê độ tin cậy (Statistical Significance & Confidence)
 19. Phân tích lỗi (Error Analysis)
 20. Khả năng giải thích mô hình (Model Interpretability)
-21. Chu trình lặp cải tiến mô hình & Khảo sát ngưỡng tối ưu (Threshold Tuning)
-22. Đóng gói và Xuất bản Mô hình Production (Model Serialization & Production Deployment)
+21. Tinh chỉnh ngưỡng quyết định và Đóng gói mô hình suy luận (Threshold Tuning & Packaging)
 
-#### Sinh lại Jupyter Notebook (nếu cần)
+#### Chạy kiểm thử hệ thống (Unit Tests)
 ```powershell
-python generate_notebook_v2.py
+python tests/test_pipeline.py
 ```
 
 ---
