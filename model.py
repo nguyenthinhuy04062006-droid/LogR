@@ -1,3 +1,5 @@
+import os
+import json
 import numpy as np
 import warnings
 import itertools
@@ -514,6 +516,92 @@ class CreditDefaultInferencePipeline:
         self.threshold = float(threshold)
         self.feature_names = list(feature_names)
         
+    @classmethod
+    def load(cls, bundle_path="weights/production_bundle.npz"):
+        """
+        Nạp trực tiếp mô hình với bộ trọng số tối ưu nhất đã được huấn luyện cho dự án.
+        Không cần huấn luyện lại hay sinh thêm file mới.
+        
+        Parameters
+        ----------
+        bundle_path : str
+            Đường dẫn file bundle trọng số (.npz hoặc .json).
+            Mặc định: 'weights/production_bundle.npz'.
+            
+        Returns
+        -------
+        CreditDefaultInferencePipeline
+            Pipeline suy luận sẵn sàng hoạt động với mô hình tốt nhất của dự án.
+        """
+        if not os.path.exists(bundle_path):
+            raise FileNotFoundError(f"[LỖI] Không tìm thấy file trọng số tối ưu tại: '{bundle_path}'")
+            
+        ext = os.path.splitext(bundle_path)[1].lower()
+        if ext == '.json':
+            with open(bundle_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            weights = np.array(data['weights'])
+            bias = float(data['bias'])
+            scaler_mean = np.array(data['scaler_mean'])
+            scaler_scale = np.array(data['scaler_scale'])
+            threshold = float(data.get('best_threshold', 0.55))
+            feature_names = list(data['feature_names'])
+            hp = data.get('hyperparameters', {})
+            C = float(hp.get('C', 50.0))
+            penalty = hp.get('penalty', 'l1')
+            class_weight = hp.get('class_weight', 'balanced')
+        else:
+            data = np.load(bundle_path, allow_pickle=True)
+            weights = data['weights'].copy()
+            bias = float(data['bias'][0])
+            scaler_mean = data['scaler_mean'].copy()
+            scaler_scale = data['scaler_scale'].copy()
+            threshold = float(data['best_th'][0]) if 'best_th' in data else 0.55
+            feature_names = [str(f) for f in data['feature_names']]
+            C = float(data['C'][0]) if 'C' in data else 50.0
+            pen_raw = str(data['penalty'][0]) if 'penalty' in data else 'l1'
+            penalty = None if pen_raw in ('none', 'None') else pen_raw
+            cw_raw = str(data['class_weight'][0]) if 'class_weight' in data else 'balanced'
+            class_weight = None if cw_raw in ('none', 'None') else cw_raw
+
+        # Khởi tạo scaler chuẩn hóa
+        scaler = StandardScaler()
+        scaler.mean_ = scaler_mean
+        scaler.scale_ = scaler_scale
+
+        # Khởi tạo mô hình LogisticRegression với đúng trọng số tối ưu
+        model = LogisticRegression(
+            C=C,
+            penalty=penalty,
+            class_weight=class_weight,
+            learning_rate=0.1,
+            max_iter=1000
+        )
+        model.weights = weights
+        model.bias = bias
+
+        return cls(model=model, scaler=scaler, threshold=threshold, feature_names=feature_names)
+
+    def save(self, bundle_path="weights/production_bundle.npz"):
+        """
+        Lưu bundle mô hình tốt nhất gồm trọng số, scaler, ngưỡng tối ưu và danh sách đặc trưng.
+        """
+        os.makedirs(os.path.dirname(os.path.abspath(bundle_path)), exist_ok=True)
+        export_bundle = {
+            'weights'      : self.model.weights,
+            'bias'         : np.array([self.model.bias]),
+            'scaler_mean'  : self.scaler.mean_,
+            'scaler_scale' : self.scaler.scale_,
+            'best_th'      : np.array([self.threshold]),
+            'feature_names': np.array(self.feature_names),
+            'C'            : np.array([self.model.C]),
+            'penalty'      : np.array([str(self.model.penalty) if self.model.penalty is not None else 'none']),
+            'class_weight' : np.array([str(self.model.class_weight) if self.model.class_weight is not None else 'none']),
+            'learning_rate': np.array([self.model.learning_rate]),
+            'max_iter'     : np.array([self.model.max_iter])
+        }
+        np.savez_compressed(bundle_path, **export_bundle)
+
     def predict_proba(self, X_input):
         X_mat = self._prepare_matrix(X_input)
         X_scaled = self.scaler.transform(X_mat)

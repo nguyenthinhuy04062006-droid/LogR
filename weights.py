@@ -78,6 +78,19 @@ def save_weights(model, path: str = "model_weights.npz", feature_names=None) -> 
     if dir_name:
         os.makedirs(dir_name, exist_ok=True)
 
+    # Kiem tra neu file da ton tai voi cung trong so thi giu nguyen, khong sinh lai lien tuc
+    if os.path.exists(path):
+        try:
+            if path.endswith(".npz"):
+                existing = np.load(path, allow_pickle=True)
+                if "weights" in existing and np.allclose(existing["weights"], model.weights, atol=1e-7):
+                    txt_path = os.path.splitext(path)[0] + ".txt"
+                    if os.path.exists(txt_path):
+                        print(f"[WEIGHTS] File '{path}' da chua trong so toi uu hien tai, giu nguyen khong sinh lai.")
+                        return path
+        except Exception:
+            pass
+
     ext = os.path.splitext(path)[1].lower()
     if ext == ".json":
         _save_json(model, path, feature_names)
@@ -165,7 +178,7 @@ def _save_txt(model, path: str, feature_names):
     lines = []
     lines.append(sep)
     lines.append("  LOGISTIC REGRESSION — TRONG SO MO HINH (Model Weights)")
-    lines.append(f"  Tao luc: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("  Trang thai: San sang van hanh san pham (Production Ready)")
     lines.append(sep)
 
     # --- Sieu tham so ---
@@ -322,6 +335,20 @@ def load_weights(path: str):
         print(f"[WEIGHTS] Doc chi tiet trong so tai: '{txt_path}'")
 
     return model
+
+
+def load_production_bundle(bundle_path: str = "weights/production_bundle.npz"):
+    """
+    Nạp toàn bộ pipeline mô hình với bộ trọng số tốt nhất đã kiểm định cho dự án.
+    Bao gồm model, scaler, ngưỡng tối ưu tau* và danh sách 27 đặc trưng.
+    """
+    from model import CreditDefaultInferencePipeline
+    return CreditDefaultInferencePipeline.load(bundle_path)
+
+
+def load_best_pipeline(bundle_path: str = "weights/production_bundle.npz"):
+    """Bí danh ngắn gọn cho load_production_bundle."""
+    return load_production_bundle(bundle_path)
 
 
 def _load_npz(path: str, LogisticRegression):

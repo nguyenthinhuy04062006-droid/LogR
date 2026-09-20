@@ -423,31 +423,23 @@ def main():
         'random_state'  : np.array([best_lr.random_state]),
     }
 
-    np.savez_compressed(weights_filename, **export_bundle)
-    
-    # Lưu thêm JSON để phục vụ kiểm tra
-    import json
-    export_json = {
-        'weights': best_lr.weights.tolist(),
-        'bias': float(best_lr.bias),
-        'scaler_mean': scaler.mean_.tolist(),
-        'scaler_scale': scaler.scale_.tolist(),
-        'best_threshold': float(best_threshold),
-        'feature_names': feature_names,
-        'hyperparameters': {
-            'C': float(best_lr.C),
-            'penalty': best_lr.penalty,
-            'class_weight': str(best_lr.class_weight),
-            'learning_rate': float(best_lr.learning_rate),
-            'max_iter': int(best_lr.max_iter)
-        }
-    }
-    with open(json_filename, 'w', encoding='utf-8') as f:
-        json.dump(export_json, f, ensure_ascii=False, indent=2)
+    already_saved = False
+    if os.path.exists(weights_filename):
+        try:
+            curr_npz = np.load(weights_filename, allow_pickle=True)
+            if 'weights' in curr_npz and np.allclose(curr_npz['weights'], best_lr.weights, atol=1e-7):
+                already_saved = True
+                print(f"\n  [WEIGHTS] Tệp trọng số tối ưu nhất ({weights_filename}) đã tồn tại chuẩn xác.")
+                print(f"  --> Nạp trực tiếp tệp trọng số tốt nhất vào mô hình dự án, không ghi đè/sinh file liên tục.")
+        except Exception:
+            pass
 
-    # Lưu thêm baseline và best weights định dạng chuẩn qua weights.py
-    save_weights(best_lr, path=os.path.join(weights_dir, "best_model_weights.npz"), feature_names=feature_names)
-    save_weights(base_lr, path=os.path.join(weights_dir, "baseline_weights.npz"), feature_names=feature_names)
+    if not already_saved:
+        np.savez_compressed(weights_filename, **export_bundle)
+        with open(json_filename, 'w', encoding='utf-8') as f:
+            json.dump(export_json, f, ensure_ascii=False, indent=2)
+        save_weights(best_lr, path=os.path.join(weights_dir, "best_model_weights.npz"), feature_names=feature_names)
+        save_weights(base_lr, path=os.path.join(weights_dir, "baseline_weights.npz"), feature_names=feature_names)
 
     sz = os.path.getsize(weights_filename) / 1024
     print(f"\n  [EXPORT] File chính thức: {weights_filename} ({sz:.2f} KB)")
@@ -456,30 +448,16 @@ def main():
 
     # --- Kiểm chứng load lại ---
     print("\n  [VERIFY] Đang load lại pipeline từ file .npz và kiểm chứng...")
-    data_v = np.load(weights_filename, allow_pickle=True)
+    from model import CreditDefaultInferencePipeline
+    pipeline_prod = CreditDefaultInferencePipeline.load(weights_filename)
 
-    scaler_v = StandardScaler()
-    scaler_v.mean_  = data_v['scaler_mean']
-    scaler_v.scale_ = data_v['scaler_scale']
+    lr_v = pipeline_prod.model
+    scaler_v = pipeline_prod.scaler
+    th_v = pipeline_prod.threshold
 
-    pen_v = str(data_v['penalty'][0]); pen_v = None if pen_v == 'none' else pen_v
-    cw_v  = str(data_v['class_weight'][0]); cw_v = None if cw_v  == 'none' else cw_v
-    lr_v = LogisticRegression(
-        C=float(data_v['C'][0]), penalty=pen_v, class_weight=cw_v,
-        learning_rate=float(data_v['learning_rate'][0]),
-        max_iter=int(data_v['max_iter'][0]),
-        tol=float(data_v['tol'][0]),
-        l1_ratio=float(data_v['l1_ratio'][0]),
-        init=str(data_v['init'][0]),
-        random_state=int(data_v['random_state'][0])
-    )
-    lr_v.weights = data_v['weights']
-    lr_v.bias    = float(data_v['bias'][0])
-    th_v         = float(data_v['best_th'][0])
-
-    X_test_v     = scaler_v.transform(X_test)   # raw X_test, chưa scale
-    proba_v      = lr_v.predict_proba(X_test_v)[:, 1]
-    preds_v      = (proba_v >= th_v).astype(int)
+    X_test_v     = X_test   # raw X_test, chưa scale
+    proba_v      = pipeline_prod.predict_proba(X_test_v)
+    preds_v      = pipeline_prod.predict(X_test_v)
 
     proba_orig   = best_lr.predict_proba(X_test_scaled)[:, 1]
     max_diff     = float(np.max(np.abs(proba_orig - proba_v)))
@@ -495,10 +473,6 @@ def main():
         print("  >>> ĐÓNG GÓI CHÍNH XÁC 100% — SẴN SÀNG VẬN HÀNH THỰC TẾ! <<<")
 
     # --- Demo suy luận thực tế với CreditDefaultInferencePipeline ---
-    from model import CreditDefaultInferencePipeline
-    pipeline_prod = CreditDefaultInferencePipeline(
-        model=lr_v, scaler=scaler_v, threshold=th_v, feature_names=feature_names
-    )
     sample_idx = 0
     sample_input = X_test[sample_idx:sample_idx+1]
     sample_prob = float(pipeline_prod.predict_proba(sample_input)[0])

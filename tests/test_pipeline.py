@@ -133,25 +133,13 @@ class TestProductionBundleAndPipeline:
     def test_pipeline_inference(self):
         from model import CreditDefaultInferencePipeline
         bundle_path = os.path.join("weights", "production_bundle.npz")
-        data = np.load(bundle_path, allow_pickle=True)
         
-        scaler = StandardScaler()
-        scaler.mean_ = data['scaler_mean']
-        scaler.scale_ = data['scaler_scale']
-        
-        model = LogisticRegression(
-            C=float(data['C'][0]),
-            penalty=str(data['penalty'][0]) if str(data['penalty'][0]) != 'none' else None,
-            class_weight=str(data['class_weight'][0]) if str(data['class_weight'][0]) != 'none' else None
-        )
-        model.weights = data['weights']
-        model.bias = float(data['bias'][0])
-        best_th = float(data['best_th'][0])
-        feat_names = list(data['feature_names'])
-        
-        pipeline = CreditDefaultInferencePipeline(
-            model=model, scaler=scaler, threshold=best_th, feature_names=feat_names
-        )
+        # Nạp trực tiếp pipeline từ file trọng số tối ưu nhất
+        pipeline = CreditDefaultInferencePipeline.load(bundle_path)
+        assert len(pipeline.feature_names) == 27
+        assert pipeline.threshold == 0.55
+        assert pipeline.model.weights is not None
+        assert len(pipeline.model.weights) == 27
         
         # Test input of 27 features
         dummy_input = np.zeros((1, 27))
