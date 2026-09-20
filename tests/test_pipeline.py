@@ -127,7 +127,7 @@ class TestProductionBundleAndPipeline:
             assert k in data, f"Thiếu key '{k}' trong production_bundle.npz"
             
         assert len(data['weights']) == len(data['feature_names'])
-        assert len(data['feature_names']) == 27, f"Kỳ vọng 27 đặc trưng sau FE, nhận {len(data['feature_names'])}"
+        assert len(data['feature_names']) == 30, f"Kỳ vọng 30 đặc trưng sau One-Hot & FE, nhận {len(data['feature_names'])}"
         assert 0.30 <= float(data['best_th'][0]) <= 0.70
 
     def test_pipeline_inference(self):
@@ -136,13 +136,13 @@ class TestProductionBundleAndPipeline:
         
         # Nạp trực tiếp pipeline từ file trọng số tối ưu nhất
         pipeline = CreditDefaultInferencePipeline.load(bundle_path)
-        assert len(pipeline.feature_names) == 27
+        assert len(pipeline.feature_names) == 30
         assert pipeline.threshold == 0.55
         assert pipeline.model.weights is not None
-        assert len(pipeline.model.weights) == 27
+        assert len(pipeline.model.weights) == 30
         
-        # Test input of 27 features
-        dummy_input = np.zeros((1, 27))
+        # Test input of 30 features
+        dummy_input = np.zeros((1, 30))
         prob = pipeline.predict_proba(dummy_input)[0]
         assert 0.0 <= prob <= 1.0
         

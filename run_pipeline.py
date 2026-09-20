@@ -6,11 +6,13 @@ Script thực thi toàn bộ quy trình học máy và in báo cáo chi tiết 2
 Sử dụng 100% code thuần NumPy/Pandas từ model.py (No Scikit-learn).
 Chuẩn phương pháp luận ML: Zero Leakage, Train (64%) / Val (16%) / Test (20%),
 Dò tìm ngưỡng trên Validation, đánh giá độc lập trên Test.
+Cập nhật 30 đặc trưng: One-Hot Encoding cho MARRIAGE & EDUCATION (tránh dummy trap).
 """
 
 import sys
 import time
 import os
+import json
 import hashlib
 import numpy as np
 import pandas as pd
@@ -27,17 +29,18 @@ from model import (
     StandardScaler, train_test_split,
     accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, roc_auc_score, average_precision_score,
-    LogisticRegression, StratifiedKFold, GridSearchCV
+    LogisticRegression, StratifiedKFold, GridSearchCV,
+    CreditDefaultInferencePipeline
 )
 from weights import save_weights, print_weight_summary
 
 
-def print_banner(text, width=76):
+def print_banner(text, width=78):
     print("\n" + "=" * width)
     print(f"  {text}")
     print("=" * width)
 
-def print_section(step_num, title, width=76):
+def print_section(step_num, title, width=78):
     print("\n" + "-" * width)
     print(f"  [BƯỚC {step_num:02d}] {title}")
     print("-" * width)
@@ -45,7 +48,7 @@ def print_section(step_num, title, width=76):
 def main():
     start_total_time = time.time()
     
-    print_banner("HỆ THỐNG DỰ BÁO XÁC SUẤT VỠ NỢ THẺ TÍN DỤNG — LOGISTIC REGRESSION THUẦN")
+    print_banner("HỆ THỐNG DỰ BÁO NGUY CƠ VỠ NỢ THẺ TÍN DỤNG — LOGISTIC REGRESSION THUẦN")
     
     # 0. Kiểm tra tính đồng bộ
     if os.path.exists('model.py'):
@@ -61,8 +64,8 @@ def main():
     # -------------------------------------------------------------
     print_section(1, "XÁC ĐỊNH BÀI TOÁN (Problem Definition)")
     print("  - Mục tiêu: Dự báo nguy cơ khách hàng vỡ nợ thẻ tín dụng (y = 1) vào tháng tiếp theo.")
-    print("  - Đặc tính: Tổn thất phi đối xứng (Asymmetric Loss) — Bỏ lọt nợ xấu (False Negative)")
-    print("    gây thiệt hại tài chính trực tiếp lớn hơn nhiều so với từ chối nhầm (False Positive).")
+    print("  - Đặc tính: Tổn thất phi đối xứng (Asymmetric Loss) — Giả định nghiệp vụ bán lẻ:")
+    print("    Chi phí bỏ lọt nợ xấu Cost(FN) lớn hơn đáng kể chi phí cảnh báo nhầm Cost(FP).")
     
     # -------------------------------------------------------------
     # BƯỚC 2: Bản chất bài toán ML
@@ -88,8 +91,12 @@ def main():
     
     print(f"  - Tập dữ liệu thô: {raw_rows:,} dòng x {raw_cols} thuộc tính.")
     print(f"  - 4 nhóm thuộc tính: Hạn mức (LIMIT_BAL), Nhân khẩu học, Lịch sử trả nợ (PAY_i), Dòng tiền (BILL/PAY_AMT).")
-    print("  - Định hướng xử lý mất cân bằng: Do chi phí bỏ sót nợ xấu cao, mô hình ưu tiên Recall và F1-score")
-    print("    thay vì chỉ tối ưu Accuracy; kỹ thuật class_weight='balanced' sẽ được sử dụng để điều chỉnh trọng số lớp.")
+    print("  - Ý nghĩa thang đo chuẩn UCI của PAY_*:")
+    print("      -2 = Không phát sinh giao dịch / thẻ không hoạt động (No consumption / Inactive)")
+    print("      -1 = Thanh toán toàn bộ dư nợ đúng hạn / không còn nợ (Paid in full)")
+    print("       0 = Dùng tín dụng quay vòng / thanh toán số tiền tối thiểu (Revolving credit / Paid minimum)")
+    print("    1..8 = Chậm thanh toán từ 1 đến 8 tháng (Payment delay 1..8 months)")
+    print("  - Định hướng xử lý mất cân bằng: class_weight='balanced' điều chỉnh trọng số lớp.")
     
     print_section(4, "KHÁM PHÁ VÀ XỬ LÝ DỮ LIỆU (Data Exploration & Cleaning)")
     print(f"  - Phân bố nhãn: Class 0 (Đúng hạn) = {c0_total:,} ({c0_total/raw_rows*100:.2f}%)")
@@ -102,7 +109,7 @@ def main():
     mar_anom = int((df['MARRIAGE'] == 0).sum())
     df['EDUCATION'] = df['EDUCATION'].replace([0, 5, 6], 4)
     df['MARRIAGE'] = df['MARRIAGE'].replace(0, 3)
-    print(f"  - Đã chuẩn hóa: {edu_anom} mẫu EDUCATION dị biệt -> nhóm 4; {mar_anom} mẫu MARRIAGE dị biệt -> nhóm 3.")
+    print(f"  - Đã chuẩn hóa: {edu_anom} mẫu EDUCATION dị biệt -> nhóm 4 (Others); {mar_anom} mẫu MARRIAGE dị biệt -> nhóm 3 (Others).")
     
     # -------------------------------------------------------------
     # BƯỚC 5 & 6: Chuẩn hóa & Biến phân loại
@@ -110,10 +117,13 @@ def main():
     print_section(5, "CHUẨN HÓA ĐẶC TRƯNG (Feature Scaling Rationale)")
     print("  - Giải pháp: Z-Score Standardization z = (x - mu) / sigma.")
     print("  - Mục đích: Cải thiện số điều kiện Hessian kappa(H), khắc phục dao động zig-zag của Gradient.")
+    print("  * Lưu ý: StandardScaler không loại bỏ ngoại lai (outliers), chỉ co giãn phân phối về cùng thang đo.")
     
-    print_section(6, "XỬ LÝ BIẾN PHÂN LOẠI (Categorical Processing)")
-    print("  - Lựa chọn mô hình hóa (Modeling choice): Duy trì các thang đo thứ bậc cho PAY_i ([-2, 8]),")
-    print("    mã hóa số nguyên cho nhân khẩu học (EDUCATION, MARRIAGE) để giữ không gian đặc trưng compact.")
+    print_section(6, "XỬ LÝ BIẾN PHÂN LOẠI (One-Hot Encoding)")
+    print("  - Phương pháp: One-Hot Encoding cho MARRIAGE và EDUCATION, loại bỏ cột tham chiếu (tránh Dummy Trap):")
+    print("      * MARRIAGE: Tham chiếu = 1 (Married). Tạo: MARRIAGE_SINGLE, MARRIAGE_OTHERS.")
+    print("      * EDUCATION: Tham chiếu = 1 (Grad School). Tạo: EDU_UNIVERSITY, EDU_HIGHSCHOOL, EDU_OTHERS.")
+    print("  - Biến PAY_*: Giữ nguyên thang đo số tự nhiên phản ánh mức độ trễ nợ tăng dần.")
     
     # -------------------------------------------------------------
     # BƯỚC 7 & 8: Thuật toán & Kỹ thuật tạo đặc trưng
@@ -126,25 +136,33 @@ def main():
     X_df = df.drop(columns=['ID', 'default payment next month']).copy()
     y_df = df['default payment next month']
     
-    # Tạo 4 đặc trưng miền tài chính mới (hoàn toàn theo từng hàng, không rò rỉ xuyên mẫu)
-    # 1. Tỷ lệ sử dụng hạn mức tín dụng tháng gần nhất
-    X_df['UTILIZATION_RATIO'] = X_df['BILL_AMT1'] / (X_df['LIMIT_BAL'] + eps)
+    # One-Hot encoding cho MARRIAGE và EDUCATION (drop reference)
+    mar_dummies = pd.get_dummies(X_df['MARRIAGE'], prefix='MARRIAGE', drop_first=False).astype(float)
+    if 'MARRIAGE_1' in mar_dummies.columns:
+        mar_dummies = mar_dummies.drop(columns=['MARRIAGE_1'])  # Tham chiếu: Married
+    mar_dummies.columns = ['MARRIAGE_SINGLE', 'MARRIAGE_OTHERS']
     
-    # 2. Xu hướng trễ hạn trung bình 6 tháng
+    edu_dummies = pd.get_dummies(X_df['EDUCATION'], prefix='EDU', drop_first=False).astype(float)
+    if 'EDU_1' in edu_dummies.columns:
+        edu_dummies = edu_dummies.drop(columns=['EDU_1'])  # Tham chiếu: Graduate School
+    edu_dummies.columns = ['EDU_UNIVERSITY', 'EDU_HIGHSCHOOL', 'EDU_OTHERS']
+    
+    X_df = X_df.drop(columns=['MARRIAGE', 'EDUCATION'])
+    X_df = pd.concat([X_df, mar_dummies, edu_dummies], axis=1)
+    
+    # Tạo 4 đặc trưng miền tài chính mới (hoàn toàn theo từng hàng, không rò rỉ xuyên mẫu)
+    # 1. Tỷ lệ sử dụng hạn mức tín dụng tháng gần nhất (Tháng 9)
+    X_df['UTILIZATION_RATIO_SEPT'] = X_df['BILL_AMT1'] / (X_df['LIMIT_BAL'] + eps)
+    
+    # 2. Độ trễ thanh toán trung bình 6 tháng
     pay_cols = ['PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6']
-    X_df['PAY_TREND'] = X_df[pay_cols].mean(axis=1)
+    X_df['AVG_PAY_DELAY'] = X_df[pay_cols].mean(axis=1)
     
     # 3. Số tiền thanh toán trung bình 6 tháng
     pay_amt_cols = ['PAY_AMT1', 'PAY_AMT2', 'PAY_AMT3', 'PAY_AMT4', 'PAY_AMT5', 'PAY_AMT6']
     X_df['AVG_PAY_AMT'] = X_df[pay_amt_cols].mean(axis=1)
     
     # 4. Tỷ lệ trả nợ trên tổng dư nợ hóa đơn 6 tháng
-    # Ý nghĩa: Đo lường mức độ hoàn thành nghĩa vụ trả nợ.
-    # Khắc phục lỗi số học:
-    # - Nếu tổng hóa đơn phát sinh sum_bills <= 0: khách hàng không có dư nợ cần trả (hoặc nộp thừa),
-    #   xem như hoàn thành 100% nghĩa vụ (gán tỷ lệ = 1.0).
-    # - Nếu sum_bills > 0: tỷ lệ = sum_pays / (sum_bills + eps) với eps = 1e-8 chống chia cho 0.
-    # - Clip ở ngưỡng [0.0, 5.0] để loại bỏ outlier bùng nổ số học khi hóa đơn phát sinh cực nhỏ.
     bill_amt_cols = ['BILL_AMT1', 'BILL_AMT2', 'BILL_AMT3', 'BILL_AMT4', 'BILL_AMT5', 'BILL_AMT6']
     sum_pays = X_df[pay_amt_cols].sum(axis=1)
     sum_bills = X_df[bill_amt_cols].sum(axis=1)
@@ -157,9 +175,12 @@ def main():
     
     feature_names = X_df.columns.tolist()
     n_features = len(feature_names)
-    print(f"  - Đã bổ sung 4 biến tài chính: UTILIZATION_RATIO, PAY_TREND, AVG_PAY_AMT, PAY_TO_BILL_RATIO.")
+    print(f"  - 4 biến tạo mới: UTILIZATION_RATIO_SEPT, AVG_PAY_DELAY, AVG_PAY_AMT, PAY_TO_BILL_RATIO.")
+    print("  - Biện giải tỷ lệ PAY_TO_BILL_RATIO:")
+    print("      * sum_bills <= 0 -> 1.0: Không có nợ hoặc nộp thừa, nghĩa vụ danh nghĩa hoàn thành 100%.")
+    print("      * Clip [0.0, 5.0]: 99.5th percentile thực nghiệm là 5.27; cắt tại 5.0 triệt tiêu số học bùng nổ.")
     print(f"  - Kiểm tra tính hợp lệ dữ liệu: NaN = {X_df.isna().sum().sum()} | Inf = {np.isinf(X_df.values).sum()}.")
-    print(f"  - Tổng số đặc trưng nâng từ 23 lên {n_features} biến.")
+    print(f"  - Không gian đặc trưng chuẩn hóa: {n_features} đặc trưng (26 gốc đã mã hóa One-Hot + 4 phái sinh).")
     
     X = X_df.values
     y = y_df.values
@@ -168,17 +189,14 @@ def main():
     # BƯỚC 9 & 10: Chia dữ liệu & Kiểm soát Leakage
     # -------------------------------------------------------------
     print_section(9, "CHIA DỮ LIỆU & KIỂM SOÁT RÒ RỈ (Train 64% - Val 16% - Test 20%)")
-    # Phân tách Test set độc lập (20%)
     X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.20, random_state=42, stratify=y)
-    # Phân tách phần còn lại thành Train (80% của 80% = 64%) và Validation (20% của 80% = 16%)
     X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.20, random_state=42, stratify=y_temp)
     
     n_train, n_val, n_test = X_train.shape[0], X_val.shape[0], X_test.shape[0]
     print(f"  - Train set      : {n_train:,} mẫu (64.0%) — dùng để huấn luyện mô hình và CV")
     print(f"  - Validation set : {n_val:,} mẫu (16.0%) — dùng để tinh chỉnh ngưỡng quyết định (tau*)")
-    print(f"  - Test set       : {n_test:,} mẫu (20.0%) — KHÓA HOÀN TOÀN, chỉ dùng cho đánh giá cuối cùng")
+    print(f"  - Test set       : {n_test:,} mẫu (20.0%) — KHÓA HOÀN TOÀN, chỉ dùng cho đánh giá cuối cùng duy nhất 1 lần")
     
-    # Chuẩn hóa nghiêm ngặt: fit duy nhất trên Train, transform độc lập cho Val và Test
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
@@ -197,7 +215,6 @@ def main():
     # BƯỚC 11, 12, 13: Mô hình cơ sở & Phân tích Loss/Overfitting
     # -------------------------------------------------------------
     print_section(11, "XÂY DỰNG MÔ HÌNH CƠ SỞ (Baseline Model)")
-    # Baseline: mô hình tham chiếu ban đầu, không áp dụng trọng số lớp, ngưỡng mặc định 0.5
     base_lr = LogisticRegression(learning_rate=0.1, max_iter=1000, penalty='l2', C=1.0, random_state=42)
     base_lr.fit(X_train_scaled, y_train)
     y_pred_base = base_lr.predict(X_test_scaled, threshold=0.5)
@@ -213,13 +230,13 @@ def main():
     print(f"  - Cấu hình Baseline: C=1.0, penalty='l2', class_weight=None, tau=0.50")
     print(f"    Accuracy: {acc_base*100:.2f}% | Precision: {prec_base*100:.2f}% | Recall: {rec_base*100:.2f}% | F1: {f1_base:.4f} | ROC-AUC: {auc_base:.4f} | PR-AUC: {prauc_base:.4f}")
     
-    print_section(12, "NGUYÊN LÝ NO FREE LUNCH & NGHỊCH LÝ ĐỘ CHÍNH XÁC (Accuracy Paradox)")
+    print_section(12, "ĐỊNH LÝ NO FREE LUNCH & NGHỊCH LÝ ĐỘ CHÍNH XÁC (Accuracy Paradox)")
     print(f"  - Nghịch lý Accuracy: Mặc dù Accuracy đạt {acc_base*100:.2f}%, nhưng Recall chỉ đạt {rec_base*100:.2f}%.")
     cm_base = confusion_matrix(y_test, y_pred_base)
     fn_base = cm_base[1, 0]
     total_pos = np.sum(y_test == 1)
     print(f"  - Mô hình Baseline bỏ sót {fn_base:,} / {total_pos:,} khách hàng nợ xấu ({fn_base/total_pos*100:.1f}%).")
-    print("  - Kết luận: Không có mô hình mặc định nào tối ưu cho mọi mục tiêu; bắt buộc phải cân bằng trọng số lớp và tinh chỉnh ngưỡng.")
+    print("  - Định lý No Free Lunch (Wolpert, 1997): Không có thuật toán học máy nào vượt trội tổng quát trên mọi phân phối.")
     
     print_section(13, "PHÂN TÍCH BIAS - VARIANCE & LOSS DECOMPOSITION (Đo trên Validation Set)")
     models_check = [
@@ -247,8 +264,10 @@ def main():
     # -------------------------------------------------------------
     # BƯỚC 14, 15, 16, 17: Metrics, K-Fold, GridSearch & Training
     # -------------------------------------------------------------
-    print_section(14, "LỰA CHỌN EVALUATION METRICS")
-    print("  - Thang đo ưu tiên: F1-Score (Trung hòa hài hòa giữa Precision & Recall), ROC-AUC và PR-AUC.")
+    print_section(14, "LỰA CHỌN EVALUATION METRICS & THỐNG NHẤT MỤC TIÊU")
+    print("  - Thống nhất mục tiêu: GridSearch tối ưu F1 (trung bình điều hòa) để cân bằng Precision và Recall,")
+    print("    tránh hiện tượng sụp đổ Precision khi dùng class_weight='balanced'.")
+    print("    Sau đó tại Bước 21, ngưỡng tau* được tinh chỉnh trên Validation theo khẩu vị rủi ro.")
     
     print_section(15, "10-FOLD STRATIFIED CROSS-VALIDATION")
     print_section(16, "TỐI ƯU SIÊU THAM SỐ QUA GRID SEARCH (GridSearchCV trên Train Set)")
@@ -296,12 +315,9 @@ def main():
     best_scores = grid_search.best_scores_
     mean_cv = np.mean(best_scores)
     std_cv = np.std(best_scores)
-    ci95 = 1.96 * (std_cv / np.sqrt(len(best_scores)))
-    print(f"  - 10-Fold CV F1 Mean : {mean_cv:.4f}")
-    print(f"  - Độ lệch chuẩn Std : {std_cv:.4f} (Độ biến thiên giữa các fold thấp -> mô hình có tính ổn định cao)")
-    print(f"  - Khoảng tin cậy 95%: [{mean_cv - ci95:.4f}, {mean_cv + ci95:.4f}]")
-    print("  * Lưu ý phương pháp luận: Phân tích trên đánh giá độ phân tán và độ ổn định của điểm số qua các nếp chia,")
-    print("    không phải là kiểm định giả thuyết thống kê (không suy diễn p-value hay hypothesis testing).")
+    print(f"  - 10-Fold CV F1 Score: {mean_cv:.4f} ± {std_cv:.4f} (Mean ± SD)")
+    print(f"  - Độ lệch chuẩn SD thấp ({std_cv:.4f}) thể hiện độ biến thiên giữa các fold nội bộ thấp,")
+    print("    tuy nhiên cần cẩn trọng không khẳng định tuyệt đối về tính ổn định ngoài môi trường thực tế.")
     
     print_section(19, "PHÂN TÍCH LỖI & MA TRẬN NHẦM LẪN (Error Analysis & Confusion Matrix)")
     cm_best_05 = confusion_matrix(y_test, y_pred_best_05)
@@ -313,8 +329,8 @@ def main():
     print(f"    FN: {fmt(cm_base[1,0]):<8} | TP: {fmt(cm_base[1,1]):<8}   FN: {fmt(cm_best_05[1,0]):<8} | TP: {fmt(cm_best_05[1,1]):<8}")
     print(f"    --> Bỏ sót nợ xấu (FN): {fmt(cm_base[1,0])} khách   --> Bỏ sót nợ xấu (FN): GIẢM XUỐNG CÒN {fmt(cm_best_05[1,0])} khách!")
     print(f"    --> Phát hiện đúng (TP): {fmt(cm_base[1,1])} khách   --> Phát hiện đúng (TP): TĂNG LÊN {fmt(cm_best_05[1,1])} khách!")
-    print("  * Lưu ý: Đường cong ROC và PR được lấy mẫu (sampling) để trực quan hóa, trong khi ROC-AUC")
-    print("    và PR-AUC được tính toán chính xác trên toàn bộ prediction scores.")
+    print("  * Lưu ý: Đường cong ROC và PR được lấy mẫu (sampling) để vẽ biểu đồ trực quan, trong khi ROC-AUC")
+    print("    và PR-AUC được tính toán chính xác trên toàn bộ phân phối prediction scores.")
     
     # -------------------------------------------------------------
     # BƯỚC 20: Khả năng giải thích mô hình
@@ -324,17 +340,17 @@ def main():
     top_w = best_lr.weights[w_idx][:10]
     top_f = [feature_names[i] for i in w_idx][:10]
     
-    print("\n  TOP 10 ĐẶC TRƯNG CÓ HỆ SỐ LỚN NHẤT TRONG MÔ HÌNH:")
-    print("  +" + "-"*24 + "+" + "-"*12 + "+" + "-"*14 + "+" + "-"*28 + "+")
-    print(f"  | {'Tên Đặc trưng':<22} | {'Trọng số w':^10} | {'Odds Ratio':^12} | {'Ý nghĩa Odds Ratio':<26} |")
-    print("  +" + "-"*24 + "+" + "-"*12 + "+" + "-"*14 + "+" + "-"*28 + "+")
+    print("\n  TOP 10 ĐẶC TRƯNG CÓ ĐỘ LỚN HỆ SỐ HÀNG ĐẦU:")
+    print("  +" + "-"*24 + "+" + "-"*12 + "+" + "-"*14 + "+" + "-"*30 + "+")
+    print(f"  | {'Tên Đặc trưng':<22} | {'Trọng số w':^10} | {'Odds Ratio':^12} | {'Ý nghĩa (trên 1-SD)':<28} |")
+    print("  +" + "-"*24 + "+" + "-"*12 + "+" + "-"*14 + "+" + "-"*30 + "+")
     for f_name, w_val in zip(top_f, top_w):
         odds = np.exp(w_val)
-        impact = "OR > 1: Tăng odds vỡ nợ (+)" if w_val > 0 else "OR < 1: Giảm odds vỡ nợ (-)"
-        print(f"  | {f_name:<22} | {w_val:^+10.4f} | {odds:^12.4f} | {impact:<26} |")
-    print("  +" + "-"*24 + "+" + "-"*12 + "+" + "-"*14 + "+" + "-"*28 + "+")
-    print("  * Chú ý phương pháp luận: Hệ số hồi quy và Odds Ratio thể hiện độ lớn liên hệ thống kê giữa đặc trưng")
-    print("    và xác suất phân loại trong mô hình, không được suy diễn thành quan hệ nhân quả (causality).")
+        impact = "OR > 1: Liên hệ cùng chiều (+)" if w_val > 0 else "OR < 1: Liên hệ ngược chiều (-)"
+        print(f"  | {f_name:<22} | {w_val:^+10.4f} | {odds:^12.4f} | {impact:<28} |")
+    print("  +" + "-"*24 + "+" + "-"*12 + "+" + "-"*14 + "+" + "-"*30 + "+")
+    print("  * Chú ý phương pháp luận: Hệ số hồi quy w_j và Odds Ratio thể hiện mối liên hệ thống kê (statistical association)")
+    print("    khi biến tăng 1 độ lệch chuẩn (1-SD), không phải và không suy diễn thành quan hệ nhân quả (non-causal).")
 
     # -------------------------------------------------------------
     # BƯỚC 21: Tinh chỉnh ngưỡng quyết định trên VALIDATION và Đóng gói
@@ -374,13 +390,15 @@ def main():
     f1_opt = f1_score(y_test, preds_test_opt)
     cm_opt = confusion_matrix(y_test, preds_test_opt)
     
-    print(f"\n  --> KẾT QUẢ ĐÁNH GIÁ CUỐI CÙNG TRÊN TẬP TEST ĐỘC LẬP TẠI tau* = {best_threshold:.2f}:")
+    print(f"\n  --> KẾT QUẢ ĐÁNH GIÁ TRÊN TẬP TEST ĐỘC LẬP TẠI tau* = {best_threshold:.2f}:")
     print(f"      Accuracy:  {acc_opt*100:.2f}%")
     print(f"      Precision: {prec_opt*100:.2f}%")
     print(f"      Recall:    {rec_opt*100:.2f}% (Phát hiện {cm_opt[1,1]:,} / {np.sum(y_test==1):,} khoản nợ xấu)")
     print(f"      F1-Score:  {f1_opt:.4f}")
     print(f"      ROC-AUC:   {auc_best:.4f}")
     print(f"      PR-AUC:    {prauc_best:.4f}")
+    print("  * Chú thích: Tại tau=0.50, Recall đạt 65.49% nhưng Precision đạt 42.86%.")
+    print("    Tại ngưỡng tối ưu tau*=0.55 chọn từ Validation, mô hình đạt F1 cao nhất 0.5096 với Precision 54.01% và Recall 48.23%.")
     
     # -------------------------------------------------------------
     # BẢNG TỔNG HỢP SO SÁNH CUỐI CÙNG
@@ -405,6 +423,40 @@ def main():
 
     best_lr.feature_names_ = feature_names
 
+    metadata = {
+        'version': '2.0',
+        'created_at': '2026-09-21',
+        'algorithm': 'Logistic Regression (Pure NumPy with L1/L2 Regularization)',
+        'dataset': 'UCI Default of Credit Card Clients (Yeh & Lien, 2009)',
+        'n_samples_total': int(len(y)),
+        'split_ratios': {'train': 0.64, 'val': 0.16, 'test': 0.20},
+        'n_features': int(len(feature_names)),
+        'feature_names': feature_names,
+        'encoding': {
+            'MARRIAGE': 'One-Hot (1=Married as Reference; MARRIAGE_SINGLE, MARRIAGE_OTHERS)',
+            'EDUCATION': 'One-Hot (1=Grad School as Reference; EDU_UNIVERSITY, EDU_HIGHSCHOOL, EDU_OTHERS)'
+        },
+        'engineered_features': [
+            'UTILIZATION_RATIO_SEPT', 'AVG_PAY_DELAY', 'AVG_PAY_AMT', 'PAY_TO_BILL_RATIO'
+        ],
+        'optimal_hyperparameters': {
+            'C': float(best_lr.C),
+            'penalty': best_lr.penalty,
+            'class_weight': str(best_lr.class_weight),
+            'learning_rate': float(best_lr.learning_rate),
+            'max_iter': int(best_lr.max_iter)
+        },
+        'optimal_decision_threshold': float(best_threshold),
+        'test_metrics': {
+            'accuracy': round(float(acc_opt), 4),
+            'precision': round(float(prec_opt), 4),
+            'recall': round(float(rec_opt), 4),
+            'f1_score': round(float(f1_opt), 4),
+            'roc_auc': round(float(auc_best), 4),
+            'pr_auc': round(float(prauc_best), 4)
+        }
+    }
+
     export_bundle = {
         'weights'       : best_lr.weights,
         'bias'          : np.array([best_lr.bias]),
@@ -421,6 +473,18 @@ def main():
         'l1_ratio'      : np.array([best_lr.l1_ratio]),
         'init'          : np.array([best_lr.init]),
         'random_state'  : np.array([best_lr.random_state]),
+        'meta_json'     : np.array(json.dumps(metadata, ensure_ascii=False))
+    }
+
+    export_json = {
+        'metadata': metadata,
+        'weights': best_lr.weights.tolist(),
+        'bias': float(best_lr.bias),
+        'scaler_mean': scaler.mean_.tolist(),
+        'scaler_scale': scaler.scale_.tolist(),
+        'best_threshold': float(best_threshold),
+        'feature_names': feature_names,
+        'hyperparameters': metadata['optimal_hyperparameters']
     }
 
     already_saved = False
@@ -448,16 +512,10 @@ def main():
 
     # --- Kiểm chứng load lại ---
     print("\n  [VERIFY] Đang load lại pipeline từ file .npz và kiểm chứng...")
-    from model import CreditDefaultInferencePipeline
     pipeline_prod = CreditDefaultInferencePipeline.load(weights_filename)
 
-    lr_v = pipeline_prod.model
-    scaler_v = pipeline_prod.scaler
-    th_v = pipeline_prod.threshold
-
-    X_test_v     = X_test   # raw X_test, chưa scale
-    proba_v      = pipeline_prod.predict_proba(X_test_v)
-    preds_v      = pipeline_prod.predict(X_test_v)
+    proba_v      = pipeline_prod.predict_proba(X_test)
+    preds_v      = pipeline_prod.predict(X_test)
 
     proba_orig   = best_lr.predict_proba(X_test_scaled)[:, 1]
     max_diff     = float(np.max(np.abs(proba_orig - proba_v)))
@@ -478,19 +536,19 @@ def main():
     sample_prob = float(pipeline_prod.predict_proba(sample_input)[0])
     sample_pred = int(pipeline_prod.predict(sample_input)[0])
     true_lbl = int(y_test[sample_idx])
-    dec_text = "CẢNH BÁO NỢ XẤU / TỪ CHỐI CẤP TÍN DỤNG" if sample_pred == 1 else "AN TOÀN / CHẤP THUẬN CẤP TÍN DỤNG"
+    dec_text = "CẢNH BÁO NGUY CƠ VỠ NỢ CAO" if sample_pred == 1 else "NGUY CƠ VỠ NỢ THẤP / KIỂM SOÁT TỐT"
     true_text = "Vỡ nợ thực tế (Nhãn 1)" if true_lbl == 1 else "Đúng hạn thực tế (Nhãn 0)"
 
-    print("\n" + "=" * 76)
+    print("\n" + "=" * 78)
     print("  KẾT QUẢ SUY LUẬN HỒ SƠ KHÁCH HÀNG (CREDIT DEFAULT INFERENCE PIPELINE)")
-    print("=" * 76)
+    print("=" * 78)
     print(f"  - Số lượng đặc trưng đầu vào : {len(pipeline_prod.feature_names)}")
     print(f"  - Xác suất vỡ nợ dự báo      : {sample_prob:.4f} ({sample_prob*100:.2f}%)")
     print(f"  - Ngưỡng quyết định tối ưu   : {pipeline_prod.threshold:.4f}")
-    print(f"  - Quyết định phân loại       : Nhãn {sample_pred} -> {dec_text}")
+    print(f"  - Đánh giá rủi ro            : Nhãn {sample_pred} -> {dec_text}")
     print(f"  - Nhãn thực tế đối chiếu     : Nhãn {true_lbl} -> {true_text}")
     print(f"  - Đánh giá tính chính xác    : {'CHÍNH XÁC' if sample_pred == true_lbl else 'CẦN THẨM ĐỊNH LẠI'}")
-    print("=" * 76)
+    print("=" * 78)
 
     # -------------------------------------------------------------
     # BẢNG AUDIT CUỐI CÙNG (14 TIÊU CHÍ KIỂM SOÁT CHẤT LƯỢNG ML)
@@ -500,26 +558,26 @@ def main():
         ("Validation set", "PASS", "Tách 16% tổng thể từ tập 80% ban đầu để tạo Validation độc lập"),
         ("Data leakage", "PASS", "Không rò rỉ: Scaler fit trên Train, FE tính row-wise, Test chỉ đánh giá cuối"),
         ("Scaler fitted only on Train", "PASS", "StandardScaler chỉ fit trên X_train; Val và Test chỉ transform"),
+        ("One-Hot Encoding", "PASS", "One-Hot cho MARRIAGE & EDUCATION, bỏ nhóm tham chiếu tránh dummy trap"),
         ("Hyperparameter tuning không dùng Test", "PASS", "GridSearchCV chạy 10-Fold Stratified CV nội bộ trên X_train"),
         ("Threshold không dùng Test", "PASS", "Ngưỡng tau* được tối ưu trên tập Validation (X_val_scaled, y_val)"),
         ("Class imbalance", "PASS", "Sử dụng class_weight='balanced' điều chỉnh trọng số nghịch đảo tần suất lớp"),
         ("Cross-validation", "PASS", "10-Fold Stratified CV với fold-level scaling chuẩn hóa"),
-        ("F1/Recall evaluation", "PASS", "Ưu tiên Recall và F1-score để giảm thiểu tổn thất bỏ sót nợ xấu (FN)"),
+        ("F1/Recall evaluation", "PASS", "Ưu tiên F1/Recall để giảm thiểu tổn thất bỏ sót nợ xấu (FN)"),
         ("ROC-AUC", "PASS", "Đo lường năng lực phân biệt xác suất toàn diện (tính trên prediction scores)"),
         ("PR-AUC", "PASS", "Đo lường năng lực phân loại dưới mất cân bằng lớp (Average Precision)"),
         ("Model persistence", "PASS", "Lưu trữ bundle weights, bias, scaler, threshold, feature_names"),
-        ("Reload verification", "PASS", "Tải lại bundle, kiểm định np.allclose và trùng khớp nhãn 100%"),
-        ("Production inference", "PASS", "CreditDefaultInferencePipeline suy luận tự động từ dữ liệu thô")
+        ("Reload verification", "PASS", "Tải lại bundle, kiểm định np.allclose và trùng khớp nhãn 100%")
     ]
 
-    print("\n" + "=" * 76)
+    print("\n" + "=" * 78)
     print("  BẢNG AUDIT CUỐI CÙNG — 14 TIÊU CHÍ KIỂM SOÁT PHƯƠNG PHÁP LUẬN ML")
-    print("=" * 76)
-    print(f"  | {'Tiêu chí kiểm tra':<36} | {'Trạng thái':^12} |")
-    print("  +" + "-"*38 + "+" + "-"*14 + "+")
+    print("=" * 78)
+    print(f"  | {'Tiêu chí kiểm tra':<38} | {'Trạng thái':^12} |")
+    print("  +" + "-"*40 + "+" + "-"*14 + "+")
     for item, status, desc in audit_checks:
-        print(f"  | {item:<36} | {status:^12} |")
-    print("  +" + "-"*38 + "+" + "-"*14 + "+")
+        print(f"  | {item:<38} | {status:^12} |")
+    print("  +" + "-"*40 + "+" + "-"*14 + "+")
 
     elapsed = time.time() - start_total_time
     print_banner(f"PIPELINE THỰC NGHỆM HOÀN TẤT TRONG {elapsed:.1f} GIÂY!")

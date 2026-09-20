@@ -318,9 +318,9 @@ class LogisticRegression:
     def predict_proba(self, X):
         X = np.array(X)
         linear_model = np.dot(X, self.weights) + self.bias
-        prob_1 = self._sigmoid(linear_model)
-        prob_0 = 1 - prob_1
-        return np.column_stack((prob_0, prob_1))
+        p = self._sigmoid(linear_model)
+        p = np.clip(p, 1e-15, 1.0 - 1e-15)
+        return np.column_stack([1.0 - p, p])
         
     def predict(self, X, threshold=0.5):
         return (self.predict_proba(X)[:, 1] >= threshold).astype(int)
