@@ -503,7 +503,6 @@ def main():
         with open(json_filename, 'w', encoding='utf-8') as f:
             json.dump(export_json, f, ensure_ascii=False, indent=2)
         save_weights(best_lr, path=os.path.join(weights_dir, "best_model_weights.npz"), feature_names=feature_names)
-        save_weights(base_lr, path=os.path.join(weights_dir, "baseline_weights.npz"), feature_names=feature_names)
 
     sz = os.path.getsize(weights_filename) / 1024
     print(f"\n  [EXPORT] File chính thức: {weights_filename} ({sz:.2f} KB)")

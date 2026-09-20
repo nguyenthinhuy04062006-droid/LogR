@@ -36,11 +36,10 @@ d:\logistics  regression\
 ├── default_of_credit_card_clients.csv          # Tập dữ liệu gốc (30,000 dòng, 25 cột)
 ├── credit_card_default_logistic_regression.ipynb # Jupyter Notebook chuẩn học thuật 21 bước hoàn chỉnh
 ├── weights.py                                  # Module lưu trữ & nạp trọng số (.npz, .json, .txt)
-└── weights/                                    # Thư mục lưu trữ artifact mô hình
-    ├── baseline_weights.{npz,json,txt}         # Trọng số mô hình cơ sở Baseline
-    ├── best_model_weights.{npz,json,txt}       # Trọng số mô hình tối ưu Best Model
+└── weights/                                    # Thư mục lưu trữ artifact mô hình tối ưu
+    ├── best_model_weights.{npz,txt}            # Trọng số mô hình tối ưu Best Model (NumPy & Text)
     ├── production_bundle.npz                   # Gói Production nhị phân (Scaler + Model + Ngưỡng)
-    └── production_bundle.json                  # Gói Production JSON có nhãn rõ ràng
+    └── production_bundle.json                  # Gói Production JSON có nhãn và siêu dữ liệu rõ ràng
 ```
 
 ---
