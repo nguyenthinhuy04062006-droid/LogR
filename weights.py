@@ -37,32 +37,26 @@ _FORMAT_VERSION = "1.0"
 # 1. LƯU TRỌNG SỐ
 # ===========================================================================
 
-def save_weights(model, path: str = "model_weights.npz", feature_names=None) -> str:
+def save_weights(model, path: str = "weights/best_model_weights.npz", feature_names=None, verbose: bool = False) -> str:
     """
     Luu trong so va sieu tham so cua LogisticRegression ra file.
-    Luon ghi them file .txt de doc ro tung trong so.
+    Chi ghi file neu chua ton tai hoac co thay doi trong so, tranh ghi de lien tuc.
 
     Parameters
     ----------
     model : LogisticRegression
         Model da duoc huan luyen (da goi .fit()).
     path : str
-        Duong dan file luu.
-        - Ket thuc bang '.npz'  -> luu dinh dang NumPy binary.
-        - Ket thuc bang '.json' -> luu dinh dang JSON van ban.
-        Ngoai ra luon sinh them file .txt cung ten chua trong so ro rang.
+        Duong dan file luu (.npz hoac .json).
     feature_names : list[str] | None
         Ten cac dac trung (tuy chon), giup dien giai trong so.
+    verbose : bool, default=False
+        In thong bao ra terminal neu True.
 
     Returns
     -------
     str
         Duong dan file chinh da luu.
-
-    Raises
-    ------
-    ValueError
-        Neu model chua duoc huan luyen (weights la None).
     """
     if model.weights is None:
         raise ValueError(
@@ -86,7 +80,8 @@ def save_weights(model, path: str = "model_weights.npz", feature_names=None) -> 
                 if "weights" in existing and np.allclose(existing["weights"], model.weights, atol=1e-7):
                     txt_path = os.path.splitext(path)[0] + ".txt"
                     if os.path.exists(txt_path):
-                        print(f"[WEIGHTS] File '{path}' da chua trong so toi uu hien tai, giu nguyen khong sinh lai.")
+                        if verbose:
+                            print(f"[WEIGHTS] File '{path}' da chua trong so toi uu hien tai, giu nguyen khong sinh lai.")
                         return path
         except Exception:
             pass
@@ -107,8 +102,9 @@ def save_weights(model, path: str = "model_weights.npz", feature_names=None) -> 
 
     size_kb  = os.path.getsize(path) / 1024
     txt_size = os.path.getsize(txt_path) / 1024
-    print(f"[WEIGHTS] Da luu -> '{path}'  ({size_kb:.2f} KB)")
-    print(f"[WEIGHTS] Da luu -> '{txt_path}'  ({txt_size:.2f} KB)  [de doc]")
+    if verbose:
+        print(f"[WEIGHTS] Da luu -> '{path}'  ({size_kb:.2f} KB)")
+        print(f"[WEIGHTS] Da luu -> '{txt_path}'  ({txt_size:.2f} KB)  [de doc]")
     return path
 
 
@@ -292,15 +288,17 @@ def _build_meta(model, feature_names) -> dict:
 # 2. TAI TRONG SO
 # ===========================================================================
 
-def load_weights(path: str):
+def load_weights(path: str = "weights/best_model_weights.npz", verbose: bool = False):
     """
     Tai trong so tu file va phuc hoi doi tuong LogisticRegression.
 
     Parameters
     ----------
-    path : str
+    path : str, default="weights/best_model_weights.npz"
         Duong dan file (.npz hoac .json).
         Neu co file .txt cung ten, no se duoc doc de lay feature_names.
+    verbose : bool, default=False
+        In thong bao ra terminal neu True.
 
     Returns
     -------
@@ -326,13 +324,14 @@ def load_weights(path: str):
         model = _load_npz(path, LogisticRegression)
 
     n_feat = len(model.weights)
-    print(f"[WEIGHTS] Da tai <- '{path}'  ({n_feat} dac trung)")
+    if verbose:
+        print(f"[WEIGHTS] Da tai <- '{path}'  ({n_feat} dac trung)")
 
-    # Goi y neu co file .txt kem theo
-    base    = os.path.splitext(path)[0]
-    txt_path = base + ".txt"
-    if os.path.exists(txt_path):
-        print(f"[WEIGHTS] Doc chi tiet trong so tai: '{txt_path}'")
+        # Goi y neu co file .txt kem theo
+        base    = os.path.splitext(path)[0]
+        txt_path = base + ".txt"
+        if os.path.exists(txt_path):
+            print(f"[WEIGHTS] Doc chi tiet trong so tai: '{txt_path}'")
 
     return model
 
@@ -340,7 +339,7 @@ def load_weights(path: str):
 def load_production_bundle(bundle_path: str = "weights/production_bundle.npz"):
     """
     Nạp toàn bộ pipeline mô hình với bộ trọng số tốt nhất đã kiểm định cho dự án.
-    Bao gồm model, scaler, ngưỡng tối ưu tau* và danh sách 27 đặc trưng.
+    Bao gồm model, scaler, ngưỡng tối ưu tau* và danh sách 30 đặc trưng.
     """
     from model import CreditDefaultInferencePipeline
     return CreditDefaultInferencePipeline.load(bundle_path)
@@ -537,50 +536,72 @@ def get_weight_dataframe(model) -> dict:
 
 
 # ===========================================================================
-# DEMO (chay truc tiep: python weights.py)
+# THỰC THI (chạy trực tiếp: python weights.py)
+# Chỉ nạp và hiển thị bộ trọng số tối ưu nhất của dự án, không sinh file liên tục
 # ===========================================================================
 
 if __name__ == "__main__":
-    from model import LogisticRegression
-    import numpy as np
+    import sys
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
-    print("=" * 60)
-    print("  DEMO: weights.py — Luu & Tai Trong So Model")
-    print("=" * 60)
+    print("=" * 72)
+    print("  HỆ THỐNG TRỌNG SỐ MÔ HÌNH — CHỈ NẠP BỘ TRỌNG SỐ TỐI ƯU NHẤT")
+    print("=" * 72)
 
-    # Tao du lieu gia de demo
-    rng = np.random.default_rng(42)
-    X_demo = rng.standard_normal((200, 5))
-    y_demo = (X_demo[:, 0] + 0.5 * X_demo[:, 2] > 0).astype(int)
+    weights_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights")
+    bundle_path = os.path.join(weights_dir, "production_bundle.npz")
+    best_weights_path = os.path.join(weights_dir, "best_model_weights.npz")
 
-    feature_names_demo = ["PAY_0", "LIMIT_BAL", "AGE", "BILL_AMT1", "PAY_AMT1"]
+    if os.path.exists(bundle_path):
+        from model import CreditDefaultInferencePipeline
 
-    # Huan luyen model demo
-    model_demo = LogisticRegression(
-        max_iter=300, learning_rate=0.1, C=1.0, penalty="l2"
-    )
-    model_demo.fit(X_demo, y_demo)
-    model_demo.feature_names_ = feature_names_demo
+        pipeline = CreditDefaultInferencePipeline.load(bundle_path)
+        model = pipeline.model
+        feature_names = pipeline.feature_names
+        threshold = pipeline.threshold
 
-    # In tom tat trong so
-    print_weight_summary(model_demo, top_n=5)
+        print(f"  • Nguồn tệp trọng số    : {bundle_path}")
+        print(f"  • Số đặc trưng          : {len(feature_names)}")
+        print(f"  • Hệ số chệch (Bias)    : {model.bias:+.6f}")
+        print(f"  • Ngưỡng tối ưu (tau*)  : {threshold:.4f}")
+        print(f"  • Siêu tham số tối ưu   : C={model.C}, penalty='{model.penalty}', class_weight='{model.class_weight}'")
 
-    # Luu dang .npz
-    save_weights(model_demo, "demo_weights.npz", feature_names=feature_names_demo)
+        # Đọc metadata nếu có
+        try:
+            npz_data = np.load(bundle_path, allow_pickle=True)
+            if "meta_json" in npz_data:
+                meta = json.loads(str(npz_data["meta_json"]))
+                if "test_metrics" in meta:
+                    tm = meta["test_metrics"]
+                    print(f"  • Hiệu năng Test độc lập: Acc={tm.get('accuracy')*100:.2f}% | Prec={tm.get('precision')*100:.2f}% | Rec={tm.get('recall')*100:.2f}% | F1={tm.get('f1_score'):.4f} | AUC={tm.get('roc_auc'):.4f}")
+        except Exception:
+            pass
 
-    # Luu dang .json
-    save_weights(model_demo, "demo_weights.json", feature_names=feature_names_demo)
+        print("\n  TOP 10 ĐẶC TRƯNG CÓ TRỌNG SỐ LỚN NHẤT TRONG MÔ HÌNH:")
+        print("  +" + "-"*6 + "+" + "-"*26 + "+" + "-"*14 + "+" + "-"*14 + "+")
+        print(f"  | {'Top':^4} | {'Đặc trưng':<24} | {'Trọng số w':^12} | {'Odds Ratio':^12} |")
+        print("  +" + "-"*6 + "+" + "-"*26 + "+" + "-"*14 + "+" + "-"*14 + "+")
+        order = np.argsort(np.abs(model.weights))[::-1][:10]
+        for rank, idx in enumerate(order, 1):
+            fname = feature_names[idx] if idx < len(feature_names) else f"feature_{idx}"
+            w_val = model.weights[idx]
+            odds = np.exp(w_val)
+            print(f"  | {rank:^4} | {fname:<24} | {w_val:^+12.4f} | {odds:^12.4f} |")
+        print("  +" + "-"*6 + "+" + "-"*26 + "+" + "-"*14 + "+" + "-"*14 + "+")
+        print("\n  [XÁC NHẬN] Đã nạp thành công tệp trọng số tốt nhất duy nhất.")
+        print("  Không sinh file tạm, không in lặp lại.")
+        print("=" * 72)
 
-    # Tai lai tu .npz
-    model_npz = load_weights("demo_weights.npz")
-    print(f"\n[VERIFY .npz]  weights match: {np.allclose(model_demo.weights, model_npz.weights)}")
-
-    # Tai lai tu .json
-    model_json = load_weights("demo_weights.json")
-    print(f"[VERIFY .json] weights match: {np.allclose(model_demo.weights, model_json.weights)}")
-
-    # Don file demo
-    for f in ["demo_weights.npz", "demo_weights.json", "demo_weights.txt"]:
-        if os.path.exists(f):
-            os.remove(f)
-    print("\n[DEMO] Hoan tat!")
+    elif os.path.exists(best_weights_path):
+        model = load_weights(best_weights_path, verbose=False)
+        print(f"  • Nguồn tệp đã nạp: {best_weights_path}")
+        print(f"  • Số đặc trưng    : {len(model.weights)}")
+        print(f"  • Hệ số chệch     : {model.bias:+.6f}")
+        print_weight_summary(model, top_n=10)
+    else:
+        print(f"  [CẢNH BÁO] Chưa tìm thấy tệp trọng số tối ưu tại '{weights_dir}'.")
+        print("  Vui lòng chạy 'python run_pipeline.py' để khởi tạo.")
