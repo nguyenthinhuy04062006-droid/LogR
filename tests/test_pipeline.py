@@ -58,6 +58,17 @@ class TestDataAndPreprocessing:
         assert abs(prop_tr - 0.22) < 0.01
         assert abs(prop_te - 0.22) < 0.01
 
+    def test_train_val_test_split_proportions(self):
+        y = np.array([0] * 7800 + [1] * 2200) # 10,000 mẫu
+        X = np.random.randn(10000, 5)
+        X_temp, X_te, y_temp, y_te = train_test_split(X, y, test_size=0.20, random_state=42, stratify=y)
+        X_tr, X_va, y_tr, y_va = train_test_split(X_temp, y_temp, test_size=0.20, random_state=42, stratify=y_temp)
+        assert len(X_tr) == 6400
+        assert len(X_va) == 1600
+        assert len(X_te) == 2000
+        for split_y in [y_tr, y_va, y_te]:
+            assert abs(np.mean(split_y == 1) - 0.22) < 0.01
+
 
 class TestLogisticRegressionModel:
     def test_fit_and_predict(self):
@@ -156,6 +167,8 @@ if __name__ == '__main__':
     print("  [PASS] test_standard_scaler")
     t1.test_stratified_split()
     print("  [PASS] test_stratified_split")
+    t1.test_train_val_test_split_proportions()
+    print("  [PASS] test_train_val_test_split_proportions")
     
     t2 = TestLogisticRegressionModel()
     t2.test_fit_and_predict()
@@ -170,5 +183,5 @@ if __name__ == '__main__':
     print("  [PASS] test_pipeline_inference")
     
     print("=" * 60)
-    print("  TẤT CẢ 7/7 BÀI TEST ĐÃ VƯỢT QUA THÀNH CÔNG (ALL PASSED)!")
+    print("  TẤT CẢ 8/8 BÀI TEST ĐÃ VƯỢT QUA THÀNH CÔNG (ALL PASSED)!")
     print("=" * 60)
